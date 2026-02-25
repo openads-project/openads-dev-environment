@@ -11,11 +11,6 @@ _message_after_update: |
   Shared development environment updated.
   Review diffs and commit the result.
 
-ros_distro:
-  type: str
-  help: Default ROS 2 distribution used in VS Code settings.
-  default: jazzy
-
 _skip_if_exists:
   - .devcontainer/devcontainer.local.json
   - .vscode/settings.local.json
