@@ -1,0 +1,8 @@
+scripts
+.devcontainer
+.github
+.vscode
+.copier-answers.yml
+.pre-commit-config.yaml
+.gitignore
+Doxyfile
