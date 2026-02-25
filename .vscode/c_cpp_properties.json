@@ -1,0 +1,23 @@
+{
+  "configurations": [
+    {
+      "name": "ROS",
+      "compilerPath": "/usr/bin/gcc",
+      "intelliSenseMode": "gcc-x64",
+      "cStandard": "gnu11",
+      "cppStandard": "c++17",
+      "includePath": [
+        "${env:WORKSPACE}/src/**/include/*",
+        "${env:WORKSPACE}/install/*/include/*",
+        "${env:WORKSPACE}/install/*/include/*/*",
+        "/opt/ros/${env:ROS_DISTRO}/include/**",
+        "/usr/include/**"
+      ],
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": true
+      }
+    }
+  ],
+  "version": 4
+}

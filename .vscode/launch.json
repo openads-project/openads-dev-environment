@@ -1,0 +1,69 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ROS 2: Executable",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${env:WORKSPACE}/install/${input:package}/lib/${input:package}/${input:executable}",
+      "args": [],
+      "preLaunchTask": "Build",
+      "cwd": "${env:WORKSPACE}",
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    },
+    {
+      "name": "ROS 2: Launch File",
+      "type": "ros2",
+      "request": "launch",
+      "preLaunchTask": "Build",
+      "target": "${env:WORKSPACE}/install/${input:package}/share/${input:package}/launch/${input:launch_file}"
+    },
+    {
+      "name": "Python: ROS 2 Launch file",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "/opt/ros/${env:ROS_DISTRO}/bin/ros2",
+      "args": [
+        "launch",
+        "${input:package}",
+        "${input:launch_file}",
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+    },
+
+    {
+      "name": "Python: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ],
+  "inputs": [
+    {
+      "id": "package",
+      "type": "promptString",
+      "description": "Package name",
+    },
+    {
+      "id": "executable",
+      "type": "promptString",
+      "description": "Executable",
+    },
+    {
+      "id": "launch_file",
+      "type": "promptString",
+      "description": "Launch file",
+    }
+  ]
+}

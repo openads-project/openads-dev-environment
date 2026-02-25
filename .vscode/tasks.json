@@ -1,0 +1,102 @@
+{
+  "version": "2.0.0",
+  "options": {
+    "cwd": "${env:WORKSPACE}"
+  },
+  "tasks": [
+
+    {
+      "label": "Build",
+      "detail": "Builds ROS workspace using 'colcon'",
+      "type": "shell",
+      "command": "colcon build --symlink-install --cmake-args '-DCMAKE_BUILD_TYPE=Debug' '-DCMAKE_EXPORT_COMPILE_COMMANDS=1'",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Build with Build Type",
+      "detail": "Builds ROS workspace using 'colcon' with given build type",
+      "type": "shell",
+      "command": "colcon build --symlink-install --cmake-args '-DCMAKE_BUILD_TYPE=${input:cmake_build_type}' '-DCMAKE_EXPORT_COMPILE_COMMANDS=1'",
+      "group": "build",
+      "problemMatcher": "$gcc"
+    },
+
+    {
+      "label": "Test",
+      "detail": "Runs tests in ROS workspace using 'colcon'",
+      "type": "shell",
+      "command": "colcon test && colcon test-result --verbose",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+
+    {
+      "label": "Clean",
+      "detail": "Removes all build artifacts from ROS workspace",
+      "type": "shell",
+      "command": "rm -rf build/ install/ log/",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean CMake cache",
+      "detail": "Builds CMake's clean target",
+      "type": "shell",
+      "command": "colcon build --cmake-target clean",
+      "problemMatcher": "$gcc"
+    },
+
+    {
+      "label": "New ROS 2 Package",
+      "detail": "Creates a new ROS 2 package using 'ros2 pkg create'",
+      "type": "shell",
+      "command": "ros2-pkg-create --template ${input:ros2_pkg_create_template} .",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clone VCS repositories",
+      "detail": "Clones VCS repositories from '.repos' file using 'vcs import'",
+      "type": "shell",
+      "command": "vcs import --workers 1 < src/target/.repos src/upstream",
+      "problemMatcher": []
+    },
+    {
+      "label": "Install dependencies",
+      "detail": "Install ROS dependencies declared in 'package.xml' files using 'rosdep'",
+      "type": "shell",
+      "command": "sudo apt update && rosdep update && rosdep install -y --from-paths src --ignore-src",
+      "problemMatcher": []
+    }
+  ],
+
+  "inputs": [
+    {
+      "id": "cmake_build_type",
+      "type": "pickString",
+      "description": "CMake Build Type",
+      "default": "RelWithDebInfo",
+      "options": [
+        "Debug",
+        "RelWithDebInfo",
+        "Release",
+        "MinSizeRel"
+      ]
+    },
+    {
+      "id": "ros2_pkg_create_template",
+      "type": "pickString",
+      "description": "Package template",
+      "default": "ros2_cpp_pkg",
+      "options": [
+        "ros2_cpp_pkg",
+        "ros2_python_pkg",
+        "ros2_interfaces_pkg",
+      ]
+    },
+  ]
+}

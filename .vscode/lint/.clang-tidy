@@ -1,0 +1,15 @@
+---
+Checks: >
+  -*,
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  cppcoreguidelines-*,
+  google-*,
+  -google-runtime-references,
+  readability-*
+  -readability-magic-numbers,
+  -readability-implicit-bool-conversion,
+  -readability-qualified-auto,
+  -readability-redundant-string-cstr
+FormatStyle: google
+...
