@@ -186,6 +186,66 @@ def extract_raw_parameters(source: str) -> list:
     ]
 
 
+def extract_python_launch_arguments(source: str) -> list:
+    """Return [(name, default, description)] from DeclareLaunchArgument calls in a .py file."""
+    results = []
+    for m in re.finditer(r'DeclareLaunchArgument\s*\(', source):
+        # Walk forward to find the matching closing parenthesis.
+        start, depth, i = m.end(), 1, m.end()
+        while i < len(source) and depth > 0:
+            if source[i] == '(':
+                depth += 1
+            elif source[i] == ')':
+                depth -= 1
+            i += 1
+        call_body = source[start:i - 1]
+
+        name_m = re.match(r'\s*"([^"]+)"', call_body)
+        if not name_m:
+            continue
+        name = name_m.group(1)
+
+        dv_m = re.search(r'default_value\s*=\s*"([^"]*)"', call_body)
+        if dv_m:
+            default = dv_m.group(1)
+        else:
+            dv_expr = re.search(
+                r'default_value\s*=\s*(.+?)(?=,\s*\w+\s*=|\s*$)', call_body, re.DOTALL)
+            default = dv_expr.group(1).strip() if dv_expr else ''
+
+        desc_m = re.search(r'description\s*=\s*"([^"]*)"', call_body)
+        description = desc_m.group(1) if desc_m else ''
+
+        results.append((name, default, description))
+    return results
+
+
+def extract_xml_launch_arguments(source: str) -> list:
+    """Return [(name, default, description)] from <arg> elements in a .xml launch file."""
+    results = []
+    for m in re.finditer(r'<arg\b([^/]*)/>', source, re.DOTALL):
+        attrs = m.group(1)
+        name_m = re.search(r'\bname\s*=\s*"([^"]+)"', attrs)
+        if not name_m:
+            continue
+        default_m = re.search(r'\bdefault\s*=\s*"([^"]*)"', attrs)
+        desc_m = re.search(r'\bdescription\s*=\s*"([^"]*)"', attrs)
+        results.append((
+            name_m.group(1),
+            default_m.group(1) if default_m else '',
+            desc_m.group(1) if desc_m else '',
+        ))
+    return results
+
+
+def extract_launch_arguments(path: Path) -> list:
+    """Dispatch to the correct extractor based on file extension."""
+    source = path.read_text(errors='replace')
+    if path.suffix == '.xml':
+        return extract_xml_launch_arguments(source)
+    return extract_python_launch_arguments(source)
+
+
 def build_member_var_map(headers: list) -> dict:
     """Return {var_name: (cpp_type, default_str)} from member variable declarations."""
     pattern = re.compile(
@@ -240,10 +300,21 @@ def md_action_table(interfaces: list) -> str:
     return '\n'.join(rows)
 
 
-def md_launch_table(launch_files: list, repo_root: Path) -> str:
-    rows = ['| Launch File | Description |', '| --- | --- |']
-    rows += [f'| [`{f.name}`]({f.relative_to(repo_root)}) | |' for f in launch_files]
+def md_launch_args_table(args: list) -> str:
+    rows = ['| Argument | Default | Description |', '| --- | --- | --- |']
+    rows += [f'| `{name}` | `{default}` | {description} |' for name, default, description in args]
     return '\n'.join(rows)
+
+
+def render_launch_files(launch_files: list, repo_root: Path) -> str:
+    parts = []
+    for f in launch_files:
+        section = [f'### [`{f.name}`]({f.relative_to(repo_root)})']
+        args = extract_launch_arguments(f)
+        if args:
+            section += ['', md_launch_args_table(args)]
+        parts.append('\n'.join(section))
+    return '\n\n'.join(parts)
 
 
 def md_parameter_table(params: list) -> str:
@@ -357,6 +428,7 @@ def update_readme(readme_path: Path, generated: str) -> None:
     Non-empty description cells written by the user are preserved across runs.
     """
     content = readme_path.read_text() if readme_path.exists() else ''
+    generated = generated.rstrip() + '\n\n'  # ensure one trailing blank line
     section_pattern = re.compile(
         r'## Auto-generated Package Documentation\n(.*?)(?=\n## |\Z)',
         re.DOTALL,
@@ -369,7 +441,7 @@ def update_readme(readme_path: Path, generated: str) -> None:
         block = f'{AUTOGEN_HEADING}\n\n{generated}'
         new_content = section_pattern.sub(block, content)
     else:
-        new_content = content.rstrip() + f'\n\n{AUTOGEN_HEADING}\n\n{generated}\n'
+        new_content = content.rstrip() + f'\n\n{AUTOGEN_HEADING}\n\n{generated}'
     readme_path.write_text(new_content)
 
 
@@ -399,7 +471,7 @@ def main():
         pkg_parts = [f'# `{pkg_name}`']
 
         if launch_files:
-            pkg_parts += ['\n## Launch Files\n', md_launch_table(launch_files, repo_root)]
+            pkg_parts += ['\n## Launch Files\n', render_launch_files(launch_files, repo_root)]
 
         for source_file in node_sources:
             source = source_file.read_text(errors='replace')
