@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
 Auto-generates ROS2 interface documentation (topics, actions, parameters)
-by parsing C++ source files in a ROS2 repository.
+by parsing C++ source files in a ROS2 repository and inserting the result
+into the "## Auto-generated Package Documentation" section of README.md.
+If that section does not exist it is appended at the bottom.
 
 Usage:
-    python3 scripts/generate_ros_interfaces_doc.py [REPO_ROOT]
+    python3 scripts/generate_readme.py [REPO_ROOT]
 
 REPO_ROOT defaults to the script's parent directory.
-Output is printed to stdout in Markdown format.
+The README updated is REPO_ROOT/README.md.
 """
 
+import difflib
 import re
 import sys
 from dataclasses import dataclass, field
@@ -266,6 +269,111 @@ def render_node(node: NodeInterfaces) -> str:
 
 
 # ---------------------------------------------------------------------------
+# README injection
+# ---------------------------------------------------------------------------
+
+AUTOGEN_HEADING = '## Auto-generated Package Documentation'
+
+
+def normalize_key(cell: str) -> str:
+    """Strip a table first-column value down to a plain name for dict lookup."""
+    cell = cell.strip()
+    m = re.match(r'\[`([^`]+)`\]\([^)]+\)', cell)
+    if m:
+        return m.group(1)
+    m = re.match(r'`([^`]+)`', cell)
+    if m:
+        return m.group(1)
+    return cell
+
+
+def extract_existing_descriptions(text: str) -> dict:
+    """Return {normalized_name: description} for every non-empty description cell in text."""
+    descriptions = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not (line.startswith('|') and line.endswith('|')):
+            continue
+        cells = [c.strip() for c in line.split('|')[1:-1]]
+        if len(cells) < 2:
+            continue
+        if all(re.match(r'^-+$', c) for c in cells if c):  # separator row
+            continue
+        first = cells[0]
+        if not (first.startswith('`') or first.startswith('[')):  # header row
+            continue
+        desc = cells[-1]
+        if desc:
+            descriptions[normalize_key(first)] = desc
+    return descriptions
+
+
+def fill_descriptions(generated: str, old: dict) -> str:
+    """For each generated table row with an empty last cell, fill in the old description."""
+    def replace(m):
+        line = m.group(0)
+        cells = [c.strip() for c in line.split('|')[1:-1]]
+        if len(cells) < 2 or cells[-1]:
+            return line
+        desc = old.get(normalize_key(cells[0]), '')
+        if desc:
+            return re.sub(r'\| \|$', f'| {desc} |', line)
+        return line
+    return re.sub(r'^\|.*\|$', replace, generated, flags=re.MULTILINE)
+
+
+def print_diff(old: str, new: str, path: Path) -> None:
+    """Print a colored unified diff of old vs new to stderr."""
+    RED, GREEN, CYAN, RESET = '\033[31m', '\033[32m', '\033[36m', '\033[0m'
+    lines = list(difflib.unified_diff(
+        old.splitlines(keepends=True),
+        new.splitlines(keepends=True),
+        fromfile=f'a/{path.name}',
+        tofile=f'b/{path.name}',
+    ))
+    if not lines:
+        sys.stderr.write('(no changes)\n')
+        return
+    for line in lines:
+        if line.startswith('+') and not line.startswith('+++'):
+            color = GREEN
+        elif line.startswith('-') and not line.startswith('---'):
+            color = RED
+        elif line.startswith('@@'):
+            color = CYAN
+        else:
+            color = ''
+        sys.stderr.write(f'{color}{line}{RESET if color else ""}')
+
+
+def shift_headings(text: str, offset: int) -> str:
+    """Prefix every markdown heading line with `offset` extra # characters."""
+    return re.sub(r'^(#+)', lambda m: '#' * (len(m.group(1)) + offset), text, flags=re.MULTILINE)
+
+
+def update_readme(readme_path: Path, generated: str) -> None:
+    """Insert `generated` under the auto-generated section, creating it if absent.
+
+    Non-empty description cells written by the user are preserved across runs.
+    """
+    content = readme_path.read_text() if readme_path.exists() else ''
+    section_pattern = re.compile(
+        r'## Auto-generated Package Documentation\n(.*?)(?=\n## |\Z)',
+        re.DOTALL,
+    )
+    if AUTOGEN_HEADING in content:
+        m = section_pattern.search(content)
+        if m:
+            old_descriptions = extract_existing_descriptions(m.group(1))
+            generated = fill_descriptions(generated, old_descriptions)
+        block = f'{AUTOGEN_HEADING}\n\n{generated}'
+        new_content = section_pattern.sub(block, content)
+    else:
+        new_content = content.rstrip() + f'\n\n{AUTOGEN_HEADING}\n\n{generated}\n'
+    readme_path.write_text(new_content)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -307,7 +415,13 @@ def main():
 
         output_blocks.append('\n'.join(pkg_parts))
 
-    print('\n\n'.join(output_blocks))
+    generated = shift_headings('\n\n'.join(output_blocks), 2)
+    readme_path = repo_root / 'README.md'
+    old_content = readme_path.read_text() if readme_path.exists() else ''
+    update_readme(readme_path, generated)
+    new_content = readme_path.read_text()
+    sys.stderr.write(f'Updated {readme_path}\n')
+    print_diff(old_content, new_content, readme_path)
 
 
 if __name__ == '__main__':
