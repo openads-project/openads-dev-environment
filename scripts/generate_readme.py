@@ -38,6 +38,12 @@ class ActionInterface:
 
 
 @dataclass
+class ServiceInterface:
+    name: str
+    srv_type: str
+
+
+@dataclass
 class Parameter:
     name: str
     ros_type: str
@@ -50,6 +56,7 @@ class NodeInterfaces:
     node_name: str
     subscribers: list = field(default_factory=list)
     publishers: list = field(default_factory=list)
+    service_servers: list = field(default_factory=list)
     action_servers: list = field(default_factory=list)
     action_clients: list = field(default_factory=list)
     parameters: list = field(default_factory=list)
@@ -177,6 +184,13 @@ def extract_action_clients(source: str, aliases: dict) -> list:
     ]
 
 
+def extract_service_servers(source: str, aliases: dict) -> list:
+    return [
+        ServiceInterface(name=m.group(2), srv_type=cpp_ros_type(m.group(1), aliases))
+        for m in re.finditer(r'create_service\s*<([^>]+)>\s*\(\s*"([^"]+)"', source)
+    ]
+
+
 def extract_raw_parameters(source: str) -> list:
     """Return [(param_name, member_var_name, description)] from declareAndLoadParameter calls."""
     return [
@@ -300,6 +314,12 @@ def md_action_table(interfaces: list) -> str:
     return '\n'.join(rows)
 
 
+def md_service_table(interfaces: list) -> str:
+    rows = ['| Service | Type | Description |', '| --- | --- | --- |']
+    rows += [f'| `{i.name}` | `{i.srv_type}` | |' for i in interfaces]
+    return '\n'.join(rows)
+
+
 def md_launch_args_table(args: list) -> str:
     rows = ['| Argument | Default | Description |', '| --- | --- | --- |']
     rows += [f'| `{name}` | `{default}` | {description} |' for name, default, description in args]
@@ -333,6 +353,8 @@ def render_node_diagram(node: NodeInterfaces) -> str:
     lines.append(f'    NODE("{q(node.node_name)}")')
     for i, s in enumerate(node.subscribers):
         lines.append(f'    S{i}:::hidden -->|{q(s.name)}| NODE')
+    for i, ss in enumerate(node.service_servers):
+        lines.append(f'    SS{i}:::hidden o--o|{q(ss.name)}| NODE')
     for i, p in enumerate(node.publishers):
         lines.append(f'    NODE -->|{q(p.name)}| P{i}:::hidden')
     for i, a in enumerate(node.action_servers):
@@ -344,14 +366,16 @@ def render_node_diagram(node: NodeInterfaces) -> str:
 
 def render_node(node: NodeInterfaces) -> str:
     parts = [f'## `{node.node_name}`']
-    if node.subscribers or node.publishers or node.action_servers:
+    if node.subscribers or node.publishers or node.service_servers or node.action_servers:
         parts += ['', render_node_diagram(node)]
     if node.subscribers:
         parts += ['\n### Subscribed Topics\n', md_topic_table(node.subscribers)]
     if node.publishers:
         parts += ['\n### Published Topics\n', md_topic_table(node.publishers)]
+    if node.service_servers:
+        parts += ['\n### Service Servers\n', md_service_table(node.service_servers)]
     if node.action_servers:
-        parts += ['\n### Actions\n', md_action_table(node.action_servers)]
+        parts += ['\n### Action Servers\n', md_action_table(node.action_servers)]
     if node.action_clients:
         parts += ['\n### Action Clients\n', md_action_table(node.action_clients)]
     if node.parameters:
@@ -499,6 +523,7 @@ def main():
                 node_name=extract_node_name(source) or source_file.stem,
                 subscribers=extract_subscribers(source, type_aliases),
                 publishers=extract_publishers(source, type_aliases),
+                service_servers=extract_service_servers(source, type_aliases),
                 action_servers=extract_action_servers(source, type_aliases),
                 action_clients=extract_action_clients(source, type_aliases),
                 parameters=resolve_parameters(extract_raw_parameters(source), member_var_map),
