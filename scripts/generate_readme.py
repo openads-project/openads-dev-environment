@@ -324,8 +324,28 @@ def md_parameter_table(params: list) -> str:
     return '\n'.join(rows)
 
 
+def render_node_diagram(node: NodeInterfaces) -> str:
+    """Return a Mermaid flowchart showing the node's pub/sub/action interfaces."""
+    def q(s: str) -> str:
+        return s.replace('"', "'")
+
+    lines = ['```mermaid', 'flowchart LR']
+    lines.append(f'    NODE("{q(node.node_name)}")')
+    for i, s in enumerate(node.subscribers):
+        lines.append(f'    S{i}:::hidden -->|{q(s.name)}| NODE')
+    for i, p in enumerate(node.publishers):
+        lines.append(f'    NODE -->|{q(p.name)}| P{i}:::hidden')
+    for i, a in enumerate(node.action_servers):
+        lines.append(f'    AS{i}:::hidden o-.-o|{q(a.name)}| NODE')
+    lines.append('    classDef hidden display: none;')
+    lines.append('```')
+    return '\n'.join(lines)
+
+
 def render_node(node: NodeInterfaces) -> str:
     parts = [f'## `{node.node_name}`']
+    if node.subscribers or node.publishers or node.action_servers:
+        parts += ['', render_node_diagram(node)]
     if node.subscribers:
         parts += ['\n### Subscribed Topics\n', md_topic_table(node.subscribers)]
     if node.publishers:
