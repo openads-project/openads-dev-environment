@@ -124,6 +124,17 @@ def find_headers(package_dir: Path) -> list:
     ]
 
 
+def find_launch_files(package_dir: Path) -> list:
+    """Return launch files (.py, .xml, .yaml) found in any launch/ subdirectory."""
+    launch_dir = package_dir / 'launch'
+    if not launch_dir.is_dir():
+        return []
+    return [
+        p for ext in ('*.py', '*.xml', '*.yaml', '*.yml')
+        for p in sorted(launch_dir.rglob(ext))
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Extraction from source/header text
 # ---------------------------------------------------------------------------
@@ -226,6 +237,12 @@ def md_action_table(interfaces: list) -> str:
     return '\n'.join(rows)
 
 
+def md_launch_table(launch_files: list, repo_root: Path) -> str:
+    rows = ['| Launch File | Description |', '| --- | --- |']
+    rows += [f'| [`{f.name}`]({f.relative_to(repo_root)}) | |' for f in launch_files]
+    return '\n'.join(rows)
+
+
 def md_parameter_table(params: list) -> str:
     rows = ['| Parameter | Type | Default | Description |', '| --- | --- | --- | --- |']
     rows += [f'| `{p.name}` | `{p.ros_type}` | `{p.default}` | {p.description} |'
@@ -261,14 +278,20 @@ def main():
         sys.exit(1)
 
     output_blocks = []
-    for _pkg_name, pkg_dir in packages:
+    for pkg_name, pkg_dir in packages:
         node_sources = find_node_sources(pkg_dir)
-        if not node_sources:
+        launch_files = find_launch_files(pkg_dir)
+        if not node_sources and not launch_files:
             continue
 
         headers = find_headers(pkg_dir)
         member_var_map = build_member_var_map(headers)
         type_aliases = build_type_alias_map(headers)
+
+        pkg_parts = [f'# `{pkg_name}`']
+
+        if launch_files:
+            pkg_parts += ['\n## Launch Files\n', md_launch_table(launch_files, repo_root)]
 
         for source_file in node_sources:
             source = source_file.read_text(errors='replace')
@@ -280,7 +303,9 @@ def main():
                 action_clients=extract_action_clients(source, type_aliases),
                 parameters=resolve_parameters(extract_raw_parameters(source), member_var_map),
             )
-            output_blocks.append(render_node(node))
+            pkg_parts.append('\n' + render_node(node))
+
+        output_blocks.append('\n'.join(pkg_parts))
 
     print('\n\n'.join(output_blocks))
 
