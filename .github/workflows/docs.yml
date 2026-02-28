@@ -4,7 +4,7 @@ on:
   workflow_call:
 
 jobs:
-  build:
+  doxygen:
     runs-on: ubuntu-latest
     env:
       DOXYGEN_PROJECT_NAME: ${{ github.event.repository.name }}

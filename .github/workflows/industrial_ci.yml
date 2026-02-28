@@ -1,0 +1,15 @@
+name: industrial_ci
+
+on:
+  workflow_call:
+
+jobs:
+  industrial_ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: ros-industrial/industrial_ci@master
+        with:
+          ROS_DISTRO: jazzy
