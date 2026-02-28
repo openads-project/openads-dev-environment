@@ -11,5 +11,5 @@ jobs:
         with:
           submodules: true
       - uses: ros-industrial/industrial_ci@master
-        with:
+        env:
           ROS_DISTRO: jazzy
