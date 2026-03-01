@@ -398,7 +398,7 @@ def render_node(node: NodeInterfaces) -> str:
 # README injection
 # ---------------------------------------------------------------------------
 
-AUTOGEN_HEADING = '## Package Documentation'
+AUTOGEN_HEADING = '## 📦 Package Documentation'
 
 
 def normalize_key(cell: str) -> str:
@@ -508,7 +508,7 @@ def update_readme(readme_path: Path, generated: str, source_docs_url: Optional[s
         re.DOTALL,
     )
     docs_link = (
-        f'### [Source Code Documentation]({source_docs_url})\n\n' if source_docs_url else ''
+        f'[*Source Code Documentation*]({source_docs_url})\n' if source_docs_url else ''
     )
     if AUTOGEN_HEADING in content:
         m = section_pattern.search(content)
