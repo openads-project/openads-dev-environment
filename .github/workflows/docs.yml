@@ -23,7 +23,7 @@ jobs:
       - name: Run Doxygen
         uses: mattnotmitt/doxygen-action@v1
         with:
-          doxyfile-path: .dev-environment/template/Doxyfile
+          doxyfile-path: .dev-environment/Doxyfile
       - name: Publish to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         if: startsWith(github.ref, 'refs/tags/')
