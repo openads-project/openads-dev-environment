@@ -398,7 +398,7 @@ def render_node(node: NodeInterfaces) -> str:
 # README injection
 # ---------------------------------------------------------------------------
 
-AUTOGEN_HEADING = '## Auto-generated Package Documentation'
+AUTOGEN_HEADING = '## Package Documentation'
 
 
 def normalize_key(cell: str) -> str:
@@ -477,7 +477,26 @@ def shift_headings(text: str, offset: int) -> str:
     return re.sub(r'^(#+)', lambda m: '#' * (len(m.group(1)) + offset), text, flags=re.MULTILINE)
 
 
-def update_readme(readme_path: Path, generated: str) -> None:
+def get_github_pages_url(repo_root: Path) -> Optional[str]:
+    """Derive the GitHub Pages URL from the repo's git remote, or return None."""
+    import subprocess
+    try:
+        remote = subprocess.check_output(
+            ['git', 'remote', 'get-url', 'origin'],
+            cwd=repo_root, stderr=subprocess.DEVNULL, text=True,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return None
+    # SSH:   git@github.com:ORG/REPO.git
+    # HTTPS: https://github.com/ORG/REPO.git
+    m = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$', remote)
+    if not m:
+        return None
+    org, repo = m.group(1).lower(), m.group(2)
+    return f'https://{org}.github.io/{repo}'
+
+
+def update_readme(readme_path: Path, generated: str, source_docs_url: Optional[str] = None) -> None:
     """Insert `generated` under the auto-generated section, creating it if absent.
 
     Non-empty description cells written by the user are preserved across runs.
@@ -488,15 +507,18 @@ def update_readme(readme_path: Path, generated: str) -> None:
         r'## Auto-generated Package Documentation\n(.*?)(?=\n## |\Z)',
         re.DOTALL,
     )
+    docs_link = (
+        f'### [Source Code Documentation]({source_docs_url})\n\n' if source_docs_url else ''
+    )
     if AUTOGEN_HEADING in content:
         m = section_pattern.search(content)
         if m:
             old_descriptions = extract_existing_descriptions(m.group(1))
             generated = fill_descriptions(generated, old_descriptions)
-        block = f'{AUTOGEN_HEADING}\n\n{generated}'
+        block = f'{AUTOGEN_HEADING}\n\n{docs_link}{generated}'
         new_content = section_pattern.sub(block, content)
     else:
-        new_content = content.rstrip() + f'\n\n{AUTOGEN_HEADING}\n\n{generated}'
+        new_content = content.rstrip() + f'\n\n{AUTOGEN_HEADING}\n\n{docs_link}{generated}'
     readme_path.write_text(new_content)
 
 
@@ -561,7 +583,7 @@ def main():
     generated = shift_headings('\n\n'.join(output_blocks), 2)
     readme_path = repo_root / 'README.md'
     old_content = readme_path.read_text() if readme_path.exists() else ''
-    update_readme(readme_path, generated)
+    update_readme(readme_path, generated, source_docs_url=get_github_pages_url(repo_root))
     new_content = readme_path.read_text()
     sys.stderr.write(f'Updated {readme_path}\n')
     print_diff(old_content, new_content, readme_path)
