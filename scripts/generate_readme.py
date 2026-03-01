@@ -93,10 +93,7 @@ def format_default(default_str: Optional[str], cpp_type: str) -> str:
     """Format a C++ default value for Markdown display."""
     if default_str is None:
         return '[]' if 'vector' in cpp_type else ''
-    val = default_str.strip()
-    if val.startswith('"') and val.endswith('"'):
-        val = val[1:-1]
-    return val
+    return default_str.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +129,14 @@ def find_headers(package_dir: Path) -> list:
         p for ext in ('*.hpp', '*.h')
         for p in sorted(package_dir.rglob(ext))
     ]
+
+
+def find_interface_files(package_dir: Path, subdir: str, ext: str) -> list:
+    """Return sorted list of interface definition files in package_dir/subdir/."""
+    iface_dir = package_dir / subdir
+    if not iface_dir.is_dir():
+        return []
+    return sorted(iface_dir.glob(f'*.{ext}'))
 
 
 def find_launch_files(package_dir: Path) -> list:
@@ -221,7 +226,7 @@ def extract_python_launch_arguments(source: str) -> list:
 
         dv_m = re.search(r'default_value\s*=\s*"([^"]*)"', call_body)
         if dv_m:
-            default = dv_m.group(1)
+            default = f'"{dv_m.group(1)}"'
         else:
             dv_expr = re.search(
                 r'default_value\s*=\s*(.+?)(?=,\s*\w+\s*=|\s*$)', call_body, re.DOTALL)
@@ -246,7 +251,7 @@ def extract_xml_launch_arguments(source: str) -> list:
         desc_m = re.search(r'\bdescription\s*=\s*"([^"]*)"', attrs)
         results.append((
             name_m.group(1),
-            default_m.group(1) if default_m else '',
+            f'"{default_m.group(1)}"' if default_m else '',
             desc_m.group(1) if desc_m else '',
         ))
     return results
@@ -323,6 +328,12 @@ def md_service_table(interfaces: list) -> str:
 def md_launch_args_table(args: list) -> str:
     rows = ['| Argument | Default | Description |', '| --- | --- | --- |']
     rows += [f'| `{name}` | `{default}` | {description} |' for name, default, description in args]
+    return '\n'.join(rows)
+
+
+def md_interface_table(entries: list) -> str:
+    rows = ['| Type | Description |', '| --- | --- |']
+    rows += [f'| [`{full_type}`]({rel_path}) | |' for full_type, rel_path in entries]
     return '\n'.join(rows)
 
 
@@ -503,32 +514,47 @@ def main():
 
     output_blocks = []
     for pkg_name, pkg_dir in packages:
+        msgs = find_interface_files(pkg_dir, 'msg', 'msg')
+        srvs = find_interface_files(pkg_dir, 'srv', 'srv')
+        actions = find_interface_files(pkg_dir, 'action', 'action')
         node_sources = find_node_sources(pkg_dir)
         launch_files = find_launch_files(pkg_dir)
-        if not node_sources and not launch_files:
-            continue
 
-        headers = find_headers(pkg_dir)
-        member_var_map = build_member_var_map(headers)
-        type_aliases = build_type_alias_map(headers)
+        if not msgs and not srvs and not actions and not node_sources and not launch_files:
+            continue
 
         pkg_parts = [f'# `{pkg_name}`']
 
-        if launch_files:
-            pkg_parts += ['\n## Launch Files\n', render_launch_files(launch_files, repo_root)]
+        if msgs:
+            entries = [(f'{pkg_name}/msg/{f.stem}', f.relative_to(repo_root)) for f in msgs]
+            pkg_parts += ['\n## Messages\n', md_interface_table(entries)]
+        if srvs:
+            entries = [(f'{pkg_name}/srv/{f.stem}', f.relative_to(repo_root)) for f in srvs]
+            pkg_parts += ['\n## Services\n', md_interface_table(entries)]
+        if actions:
+            entries = [(f'{pkg_name}/action/{f.stem}', f.relative_to(repo_root)) for f in actions]
+            pkg_parts += ['\n## Actions\n', md_interface_table(entries)]
 
-        for source_file in node_sources:
-            source = source_file.read_text(errors='replace')
-            node = NodeInterfaces(
-                node_name=extract_node_name(source) or source_file.stem,
-                subscribers=extract_subscribers(source, type_aliases),
-                publishers=extract_publishers(source, type_aliases),
-                service_servers=extract_service_servers(source, type_aliases),
-                action_servers=extract_action_servers(source, type_aliases),
-                action_clients=extract_action_clients(source, type_aliases),
-                parameters=resolve_parameters(extract_raw_parameters(source), member_var_map),
-            )
-            pkg_parts.append('\n' + render_node(node))
+        if node_sources or launch_files:
+            headers = find_headers(pkg_dir)
+            member_var_map = build_member_var_map(headers)
+            type_aliases = build_type_alias_map(headers)
+
+            if launch_files:
+                pkg_parts += ['\n## Launch Files\n', render_launch_files(launch_files, repo_root)]
+
+            for source_file in node_sources:
+                source = source_file.read_text(errors='replace')
+                node = NodeInterfaces(
+                    node_name=extract_node_name(source) or source_file.stem,
+                    subscribers=extract_subscribers(source, type_aliases),
+                    publishers=extract_publishers(source, type_aliases),
+                    service_servers=extract_service_servers(source, type_aliases),
+                    action_servers=extract_action_servers(source, type_aliases),
+                    action_clients=extract_action_clients(source, type_aliases),
+                    parameters=resolve_parameters(extract_raw_parameters(source), member_var_map),
+                )
+                pkg_parts.append('\n' + render_node(node))
 
         output_blocks.append('\n'.join(pkg_parts))
 
