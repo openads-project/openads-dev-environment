@@ -20,6 +20,12 @@ jobs:
           semver_only: true
       - name: Export DOXYGEN_PROJECT_NUMBER
         run: echo "DOXYGEN_PROJECT_NUMBER=${{ steps.get-latest-tag.outputs.tag }}" >> $GITHUB_ENV
+      - name: Checkout doxygen-awesome-css
+        uses: actions/checkout@v4
+        with:
+          repository: jothepro/doxygen-awesome-css
+          ref: v2.4.1
+          path: doxygen-awesome-css
       - name: Run Doxygen
         uses: mattnotmitt/doxygen-action@v1
         with:
