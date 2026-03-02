@@ -8,7 +8,7 @@ PROJECT_NAME           = $(DOXYGEN_PROJECT_NAME)
 PROJECT_NUMBER         = $(DOXYGEN_PROJECT_NUMBER)
 # PROJECT_BRIEF          =
 # PROJECT_LOGO           =
-# OUTPUT_DIRECTORY       =
+OUTPUT_DIRECTORY       = docs/
 # CREATE_SUBDIRS         = NO
 # ALLOW_UNICODE_NAMES    = NO
 # OUTPUT_LANGUAGE        = English
@@ -64,8 +64,8 @@ PROJECT_NUMBER         = $(DOXYGEN_PROJECT_NUMBER)
 #---------------------------------------------------------------------------
 # Build related configuration options
 #---------------------------------------------------------------------------
-# EXTRACT_ALL            = NO
-# EXTRACT_PRIVATE        = NO
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
 # EXTRACT_PRIV_VIRTUAL   = NO
 # EXTRACT_PACKAGE        = NO
 # EXTRACT_STATIC         = NO
@@ -116,8 +116,14 @@ PROJECT_NUMBER         = $(DOXYGEN_PROJECT_NUMBER)
 #---------------------------------------------------------------------------
 # Configuration options related to the input files
 #---------------------------------------------------------------------------
-INPUT                  = *.h *.hpp *.hxx *.cpp *.cc *.cxx
+INPUT                  = README.md .
 # INPUT_ENCODING         = UTF-8
+FILE_PATTERNS		   = *.h \
+						 *.hpp \
+						 *.tpp \
+						 *.cpp \
+						 *.cc \
+						 */docs/*.md
 # FILE_PATTERNS          = *.c \
 #                          *.cc \
 #                          *.cxx \
@@ -264,7 +270,7 @@ GENERATE_TREEVIEW      = YES
 #---------------------------------------------------------------------------
 # Configuration options related to the LaTeX output
 #---------------------------------------------------------------------------
-# GENERATE_LATEX         = NO
+GENERATE_LATEX         = NO
 # LATEX_OUTPUT           = latex
 # LATEX_CMD_NAME         =
 # MAKEINDEX_CMD_NAME     = makeindex
