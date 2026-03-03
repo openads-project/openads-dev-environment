@@ -63,6 +63,25 @@ def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_command(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=cwd,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def git_status_porcelain(repo_root: Path) -> list[str]:
+    status = run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=repo_root)
+    if status.returncode != 0:
+        raise RuntimeError(status.stderr.strip() or "git status failed")
+    lines = [line for line in status.stdout.splitlines() if line.strip()]
+    return sorted(lines)
+
+
 def discover_ros_package_dirs(repo_root: Path) -> list[Path]:
     package_dirs: list[Path] = []
     for pkg_xml in sorted(repo_root.rglob("package.xml")):
@@ -273,6 +292,86 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
+    generator_script = ctx.repo_root / ".dev-environment" / "scripts" / "generate_readme.py"
+    if not generator_script.exists():
+        return CheckResult(
+            check_id="readme_generator_is_idempotent",
+            name="README generator produces no git changes",
+            passed=False,
+            message="README generator script is missing",
+            details=[str(generator_script)],
+        )
+
+    try:
+        before = git_status_porcelain(ctx.repo_root)
+    except RuntimeError as err:
+        return CheckResult(
+            check_id="readme_generator_is_idempotent",
+            name="README generator produces no git changes",
+            passed=False,
+            message="Failed to snapshot git status before running README generator",
+            details=[str(err)],
+        )
+
+    run_result = run_command(
+        [sys.executable, str(generator_script), str(ctx.repo_root)],
+        cwd=ctx.repo_root,
+    )
+    if run_result.returncode != 0:
+        details: list[str] = [f"exit code: {run_result.returncode}"]
+        if run_result.stderr.strip():
+            details.append(f"stderr: {run_result.stderr.strip()}")
+        if run_result.stdout.strip():
+            details.append(f"stdout: {run_result.stdout.strip()}")
+        return CheckResult(
+            check_id="readme_generator_is_idempotent",
+            name="README generator produces no git changes",
+            passed=False,
+            message="README generator execution failed",
+            details=details,
+        )
+
+    try:
+        after = git_status_porcelain(ctx.repo_root)
+    except RuntimeError as err:
+        return CheckResult(
+            check_id="readme_generator_is_idempotent",
+            name="README generator produces no git changes",
+            passed=False,
+            message="Failed to snapshot git status after running README generator",
+            details=[str(err)],
+        )
+
+    if before != after:
+        before_set = set(before)
+        after_set = set(after)
+        added = sorted(after_set - before_set)
+        removed = sorted(before_set - after_set)
+        details = []
+        if added:
+            details.append("Added git status entries:")
+            details.extend([f"+ {line}" for line in added])
+        if removed:
+            details.append("Removed git status entries:")
+            details.extend([f"- {line}" for line in removed])
+        return CheckResult(
+            check_id="readme_generator_is_idempotent",
+            name="README generator produces no git changes",
+            passed=False,
+            message="Running README generator changed git status",
+            details=details or ["git status changed (unable to compute detailed diff)"],
+        )
+
+    return CheckResult(
+        check_id="readme_generator_is_idempotent",
+        name="README generator produces no git changes",
+        passed=True,
+        message="README generator did not change git status",
+        details=[],
+    )
+
+
 CHECKS: dict[str, tuple[str, CheckFn]] = {
     "no_top_level_package_xml": ("No top-level package.xml", check_no_top_level_package_xml),
     "ros_nodes_have_parameter_loader": (
@@ -286,6 +385,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "dev_environment_at_remote_main": (
         ".dev-environment matches origin/main",
         check_dev_environment_at_remote_main,
+    ),
+    "readme_generator_is_idempotent": (
+        "README generator produces no git changes",
+        check_readme_generator_is_idempotent,
     ),
 }
 
