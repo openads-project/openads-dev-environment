@@ -13,6 +13,7 @@ The READMEs generated are <package_dir>/README.md for discovered ROS packages.
 
 import difflib
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,6 +60,16 @@ class NodeInterfaces:
     action_servers: list = field(default_factory=list)
     action_clients: list = field(default_factory=list)
     parameters: list = field(default_factory=list)
+
+
+@dataclass
+class RepoMetadata:
+    owner: str
+    repo: str
+    owner_lower: str
+    pages_url: str
+    repo_https_url: str
+    container_image: str
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +452,161 @@ def render_package_readme(package_name: str, package_description: str, package_b
 
 
 # ---------------------------------------------------------------------------
+# Top-level README rendering
+# ---------------------------------------------------------------------------
+
+INTRO_PLACEHOLDER = (
+    '**TODO: Repository tagline/description**\n\n'
+    'TODO: High-level repository introduction paragraph'
+)
+
+ACK_PLACEHOLDER = 'TODO: Project/funding acknowledgements'
+
+
+def get_origin_remote(repo_root: Path) -> str:
+    """Return origin remote URL for the repository, or raise on failure."""
+    return subprocess.check_output(
+        ['git', 'remote', 'get-url', 'origin'],
+        cwd=repo_root,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).strip()
+
+
+def parse_github_remote(remote: str) -> RepoMetadata:
+    """Extract owner/repo metadata from GitHub-style remote URL."""
+    m = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$', remote)
+    if not m:
+        raise ValueError(f'Unsupported origin remote URL: {remote}')
+    owner, repo = m.group(1), m.group(2)
+    owner_lower = owner.lower()
+    return RepoMetadata(
+        owner=owner,
+        repo=repo,
+        owner_lower=owner_lower,
+        pages_url=f'https://{owner_lower}.github.io/{repo}',
+        repo_https_url=f'https://github.com/{owner}/{repo}',
+        container_image=f'ghcr.io/{owner_lower}/{repo}:latest',
+    )
+
+
+def extract_intro_block(readme_text: str) -> str:
+    """Return repo-specific intro block (headline + paragraph) or placeholder."""
+    m = re.search(r'</p>\n\n(.*?)\n\n> \[!IMPORTANT\]', readme_text, re.DOTALL)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    return INTRO_PLACEHOLDER
+
+
+def extract_acknowledgements_body(readme_text: str) -> str:
+    """Return repo-specific acknowledgements body or placeholder."""
+    m = re.search(r'^## 🙏 Acknowledgements\n\n(.*)\Z', readme_text, re.DOTALL | re.MULTILINE)
+    if m and m.group(1).strip():
+        return m.group(1).rstrip()
+    return ACK_PLACEHOLDER
+
+
+def render_badges(meta: RepoMetadata) -> str:
+    return (
+        '<p align="center">\n'
+        f'  <a href="https://{meta.owner_lower}.github.io"><img src="https://img.shields.io/badge/OpenADS-ffff00"/></a>\n'
+        f'  <a href="{meta.repo_https_url}/releases/latest"><img src="https://img.shields.io/github/v/release/{meta.owner}/{meta.repo}"/></a>\n'
+        f'  <a href="{meta.repo_https_url}/blob/main/LICENSE"><img src="https://img.shields.io/github/license/{meta.owner}/{meta.repo}"/></a>\n'
+        '  <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>\n'
+        '  <br>\n'
+        f'  <a href="{meta.repo_https_url}/actions/workflows/docker-ros.yml"><img src="{meta.repo_https_url}/actions/workflows/docker-ros.yml/badge.svg"/></a>\n'
+        f'  <a href="{meta.repo_https_url}/actions/workflows/industrial_ci.yml"><img src="{meta.repo_https_url}/actions/workflows/industrial_ci.yml/badge.svg"/></a>\n'
+        f'  <a href="https://{meta.owner}.github.io/{meta.repo}"><img src="{meta.repo_https_url}/actions/workflows/docs.yml/badge.svg"/></a>\n'
+        '</p>'
+    )
+
+
+def render_documentation_section(repo_root: Path, meta: RepoMetadata, packages: list) -> str:
+    lines = ['## 📝 Documentation', '']
+    implementation_details = repo_root / 'docs' / 'IMPLEMENTATION.md'
+    if implementation_details.exists():
+        lines.append('- [Implementation Details](./docs/IMPLEMENTATION.md)')
+    lines.append(f'- [Source Code Documentation]({meta.pages_url})')
+    lines.append('- Package Documentation')
+    for pkg_name, pkg_dir, _ in sorted(packages, key=lambda p: p[0]):
+        rel_readme = (pkg_dir / 'README.md').relative_to(repo_root).as_posix()
+        lines.append(f'  - [{pkg_name}]({rel_readme})')
+    return '\n'.join(lines)
+
+
+def pick_quickstart_target(packages: list) -> tuple[str, str]:
+    """Choose package and launch file for quick start launch command."""
+    for pkg_name, pkg_dir, _ in sorted(packages, key=lambda p: p[0]):
+        launch_files = find_launch_files(pkg_dir)
+        if launch_files:
+            return pkg_name, launch_files[0].name
+    return 'PACKAGE_NAME', 'LAUNCH_FILE'
+
+
+def render_top_level_readme(repo_root: Path, packages: list, existing_readme: str) -> str:
+    remote = get_origin_remote(repo_root)
+    meta = parse_github_remote(remote)
+    intro_block = extract_intro_block(existing_readme)
+    ack_body = extract_acknowledgements_body(existing_readme)
+    quickstart_pkg, quickstart_launch_file = pick_quickstart_target(packages)
+    docs_section = render_documentation_section(repo_root, meta, packages)
+
+    return (
+        f'# {meta.repo}\n\n'
+        f'{render_badges(meta)}\n\n'
+        f'{intro_block}\n\n'
+        '> [!IMPORTANT]  \n'
+        f'> This repository is part of [🚗 ***OpenADS***](https://github.com/{meta.owner}), the *Open Automated Driving Stack*.\n\n'
+        '**🚀 [Quick Start](#-quick-start)** | **🧑‍💻 [Development](#-development)** | **📝 [Documentation](#-documentation)** | **🙏 [Acknowledgements](#-acknowledgements)**\n\n\n'
+        '## 🚀 Quick Start\n\n'
+        '1. Start a container of the pre-built runtime image.\n'
+        '    ```bash\n'
+        f'    docker run --rm -it {meta.container_image} bash\n'
+        '    ```\n'
+        '1. Inside the container, launch the pre-built nodes.\n'
+        '    ```bash\n'
+        f'    ros2 launch {quickstart_pkg} {quickstart_launch_file}\n'
+        '    ```\n\n'
+        '## 🧑‍💻 Development\n\n'
+        '### Set up Development Environment\n\n'
+        '1. Clone the repository.\n'
+        '    ```bash\n'
+        f'    git clone {meta.repo_https_url}.git\n'
+        '    ```\n'
+        f'1. Initialize the [`.dev-environment`](https://github.com/{meta.owner}/dev-environment) submodule containing development environment configuration.\n'
+        '    ```bash\n'
+        f'    cd {meta.repo}\n'
+        '    git submodule update --init --recursive\n'
+        '    ```\n'
+        '1. Open the repository in [Visual Studio Code](https://code.visualstudio.com).\n'
+        '    ```bash\n'
+        '    code .\n'
+        '    ```\n'
+        '1. Install the recommended VS Code extensions.  \n'
+        '    > *Ctrl+Shift+P / Extensions: Show Recommended Extensions / Install Workspace Recommended Extensions (Cloud Download Icon)*\n'
+        '1. Reopen the repository in a [Dev Container](https://code.visualstudio.com/docs/devcontainers/containers).\n'
+        '    > *Ctrl+Shift+P / Dev Containers: Rebuild and Reopen in Container*\n\n'
+        '### Build\n\n'
+        '> *Ctrl+Shift+B*\n\n'
+        'or\n\n'
+        '```bash\n'
+        'colcon build\n'
+        '```\n\n'
+        '### Run Tests\n\n'
+        '> *Ctrl+Shift+P / Tasks: Run Test Task*\n\n'
+        'or\n\n'
+        '```bash\n'
+        'colcon build --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1\n'
+        'colcon test\n'
+        'colcon test-result --verbose\n'
+        '```\n\n\n'
+        f'{docs_section}\n\n\n'
+        '## 🙏 Acknowledgements\n\n'
+        f'{ack_body}\n'
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -449,8 +615,7 @@ def main():
 
     packages = find_packages(repo_root)
     if not packages:
-        print('No ROS packages found.', file=sys.stderr)
-        sys.exit(1)
+        print('Warning: no ROS packages found.', file=sys.stderr)
 
     for pkg_name, pkg_dir, pkg_description in packages:
         msgs = find_interface_files(pkg_dir, 'msg', 'msg')
@@ -510,6 +675,13 @@ def main():
         readme_path.write_text(new_content)
         sys.stderr.write(f'Updated {readme_path}\n')
         print_diff(old_content, new_content, readme_path)
+
+    root_readme_path = repo_root / 'README.md'
+    old_root_readme = root_readme_path.read_text() if root_readme_path.exists() else ''
+    new_root_readme = render_top_level_readme(repo_root, packages, old_root_readme)
+    root_readme_path.write_text(new_root_readme)
+    sys.stderr.write(f'Updated {root_readme_path}\n')
+    print_diff(old_root_readme, new_root_readme, root_readme_path)
 
 
 if __name__ == '__main__':
