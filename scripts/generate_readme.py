@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
 Auto-generates ROS2 interface documentation (topics, actions, parameters)
-by parsing C++ source files in a ROS2 repository and inserting the result
-into the "## Auto-generated Package Documentation" section of README.md.
-If that section does not exist it is appended at the bottom.
+by parsing C++ source files in a ROS2 repository and writing full package
+README.md files next to package.xml.
 
 Usage:
     python3 scripts/generate_readme.py [REPO_ROOT]
 
 REPO_ROOT defaults to the script's parent directory.
-The README updated is REPO_ROOT/README.md.
+The READMEs generated are <package_dir>/README.md for discovered ROS packages.
 """
 
 import difflib
@@ -101,14 +100,18 @@ def format_default(default_str: Optional[str], cpp_type: str) -> str:
 # ---------------------------------------------------------------------------
 
 def find_packages(repo_root: Path) -> list:
-    """Return [(package_name, package_dir)] for all ROS packages found."""
+    """Return [(package_name, package_dir, package_description)] for ROS packages."""
     packages = []
     for pkg_xml in sorted(repo_root.rglob('package.xml')):
         try:
             root = ElementTree.parse(pkg_xml).getroot()
             name_el = root.find('name')
+            description_el = root.find('description')
             if name_el is not None and name_el.text:
-                packages.append((name_el.text.strip(), pkg_xml.parent))
+                description = ''
+                if description_el is not None and description_el.text:
+                    description = ' '.join(description_el.text.split())
+                packages.append((name_el.text.strip(), pkg_xml.parent, description))
         except ElementTree.ParseError:
             pass
     return packages
@@ -337,10 +340,10 @@ def md_interface_table(entries: list) -> str:
     return '\n'.join(rows)
 
 
-def render_launch_files(launch_files: list, repo_root: Path) -> str:
+def render_launch_files(launch_files: list, doc_root: Path) -> str:
     parts = []
     for f in launch_files:
-        section = [f'### [`{f.name}`]({f.relative_to(repo_root)})']
+        section = [f'### [`{f.name}`]({f.relative_to(doc_root)})']
         args = extract_launch_arguments(f)
         if args:
             section += ['', md_launch_args_table(args)]
@@ -376,76 +379,22 @@ def render_node_diagram(node: NodeInterfaces) -> str:
 
 
 def render_node(node: NodeInterfaces) -> str:
-    parts = [f'## `{node.node_name}`']
+    parts = [f'### `{node.node_name}`']
     if node.subscribers or node.publishers or node.service_servers or node.action_servers:
         parts += ['', render_node_diagram(node)]
     if node.subscribers:
-        parts += ['\n### Subscribed Topics\n', md_topic_table(node.subscribers)]
+        parts += ['\n#### Subscribed Topics\n', md_topic_table(node.subscribers)]
     if node.publishers:
-        parts += ['\n### Published Topics\n', md_topic_table(node.publishers)]
+        parts += ['\n#### Published Topics\n', md_topic_table(node.publishers)]
     if node.service_servers:
-        parts += ['\n### Service Servers\n', md_service_table(node.service_servers)]
+        parts += ['\n#### Service Servers\n', md_service_table(node.service_servers)]
     if node.action_servers:
-        parts += ['\n### Action Servers\n', md_action_table(node.action_servers)]
+        parts += ['\n#### Action Servers\n', md_action_table(node.action_servers)]
     if node.action_clients:
-        parts += ['\n### Action Clients\n', md_action_table(node.action_clients)]
+        parts += ['\n#### Action Clients\n', md_action_table(node.action_clients)]
     if node.parameters:
-        parts += ['\n### Parameters\n', md_parameter_table(node.parameters)]
+        parts += ['\n#### Parameters\n', md_parameter_table(node.parameters)]
     return '\n'.join(parts)
-
-
-# ---------------------------------------------------------------------------
-# README injection
-# ---------------------------------------------------------------------------
-
-AUTOGEN_HEADING = '## 📦 Package Documentation'
-
-
-def normalize_key(cell: str) -> str:
-    """Strip a table first-column value down to a plain name for dict lookup."""
-    cell = cell.strip()
-    m = re.match(r'\[`([^`]+)`\]\([^)]+\)', cell)
-    if m:
-        return m.group(1)
-    m = re.match(r'`([^`]+)`', cell)
-    if m:
-        return m.group(1)
-    return cell
-
-
-def extract_existing_descriptions(text: str) -> dict:
-    """Return {normalized_name: description} for every non-empty description cell in text."""
-    descriptions = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not (line.startswith('|') and line.endswith('|')):
-            continue
-        cells = [c.strip() for c in line.split('|')[1:-1]]
-        if len(cells) < 2:
-            continue
-        if all(re.match(r'^-+$', c) for c in cells if c):  # separator row
-            continue
-        first = cells[0]
-        if not (first.startswith('`') or first.startswith('[')):  # header row
-            continue
-        desc = cells[-1]
-        if desc:
-            descriptions[normalize_key(first)] = desc
-    return descriptions
-
-
-def fill_descriptions(generated: str, old: dict) -> str:
-    """For each generated table row with an empty last cell, fill in the old description."""
-    def replace(m):
-        line = m.group(0)
-        cells = [c.strip() for c in line.split('|')[1:-1]]
-        if len(cells) < 2 or cells[-1]:
-            return line
-        desc = old.get(normalize_key(cells[0]), '')
-        if desc:
-            return re.sub(r'\| \|$', f'| {desc} |', line)
-        return line
-    return re.sub(r'^\|.*\|$', replace, generated, flags=re.MULTILINE)
 
 
 def print_diff(old: str, new: str, path: Path) -> None:
@@ -454,8 +403,8 @@ def print_diff(old: str, new: str, path: Path) -> None:
     lines = list(difflib.unified_diff(
         old.splitlines(keepends=True),
         new.splitlines(keepends=True),
-        fromfile=f'a/{path.name}',
-        tofile=f'b/{path.name}',
+        fromfile=f'a/{path}',
+        tofile=f'b/{path}',
     ))
     if not lines:
         sys.stderr.write('(no changes)\n')
@@ -472,54 +421,23 @@ def print_diff(old: str, new: str, path: Path) -> None:
         sys.stderr.write(f'{color}{line}{RESET if color else ""}')
 
 
-def shift_headings(text: str, offset: int) -> str:
-    """Prefix every markdown heading line with `offset` extra # characters."""
-    return re.sub(r'^(#+)', lambda m: '#' * (len(m.group(1)) + offset), text, flags=re.MULTILINE)
+def render_toc(node_names: list, has_launch_files: bool) -> str:
+    entries = []
+    if node_names:
+        entries.append('- [Nodes](#nodes)')
+        entries += [f'  - [{name}](#{name})' for name in node_names]
+    if has_launch_files:
+        entries.append('- [Launch Files](#launch-files)')
+    return '\n'.join(entries)
 
 
-def get_github_pages_url(repo_root: Path) -> Optional[str]:
-    """Derive the GitHub Pages URL from the repo's git remote, or return None."""
-    import subprocess
-    try:
-        remote = subprocess.check_output(
-            ['git', 'remote', 'get-url', 'origin'],
-            cwd=repo_root, stderr=subprocess.DEVNULL, text=True,
-        ).strip()
-    except subprocess.CalledProcessError:
-        return None
-    # SSH:   git@github.com:ORG/REPO.git
-    # HTTPS: https://github.com/ORG/REPO.git
-    m = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$', remote)
-    if not m:
-        return None
-    org, repo = m.group(1).lower(), m.group(2)
-    return f'https://{org}.github.io/{repo}'
-
-
-def update_readme(readme_path: Path, generated: str, source_docs_url: Optional[str] = None) -> None:
-    """Insert `generated` under the auto-generated section, creating it if absent.
-
-    Non-empty description cells written by the user are preserved across runs.
-    """
-    content = readme_path.read_text() if readme_path.exists() else ''
-    generated = generated.rstrip() + '\n\n'  # ensure one trailing blank line
-    section_pattern = re.compile(
-        r'## Auto-generated Package Documentation\n(.*?)(?=\n## |\Z)',
-        re.DOTALL,
-    )
-    docs_link = (
-        f'[*Source Code Documentation*]({source_docs_url})\n' if source_docs_url else ''
-    )
-    if AUTOGEN_HEADING in content:
-        m = section_pattern.search(content)
-        if m:
-            old_descriptions = extract_existing_descriptions(m.group(1))
-            generated = fill_descriptions(generated, old_descriptions)
-        block = f'{AUTOGEN_HEADING}\n\n{docs_link}{generated}'
-        new_content = section_pattern.sub(block, content)
-    else:
-        new_content = content.rstrip() + f'\n\n{AUTOGEN_HEADING}\n\n{docs_link}{generated}'
-    readme_path.write_text(new_content)
+def render_package_readme(package_name: str, package_description: str, package_body: str) -> str:
+    parts = [f'# `{package_name}`']
+    if package_description:
+        parts += ['', package_description]
+    if package_body.strip():
+        parts += ['', package_body.strip()]
+    return '\n'.join(parts).rstrip() + '\n'
 
 
 # ---------------------------------------------------------------------------
@@ -534,36 +452,30 @@ def main():
         print('No ROS packages found.', file=sys.stderr)
         sys.exit(1)
 
-    output_blocks = []
-    for pkg_name, pkg_dir in packages:
+    for pkg_name, pkg_dir, pkg_description in packages:
         msgs = find_interface_files(pkg_dir, 'msg', 'msg')
         srvs = find_interface_files(pkg_dir, 'srv', 'srv')
         actions = find_interface_files(pkg_dir, 'action', 'action')
         node_sources = find_node_sources(pkg_dir)
         launch_files = find_launch_files(pkg_dir)
 
-        if not msgs and not srvs and not actions and not node_sources and not launch_files:
-            continue
-
-        pkg_parts = [f'# `{pkg_name}`']
+        pkg_parts = []
+        nodes = []
 
         if msgs:
-            entries = [(f'{pkg_name}/msg/{f.stem}', f.relative_to(repo_root)) for f in msgs]
-            pkg_parts += ['\n## Messages\n', md_interface_table(entries)]
+            entries = [(f'{pkg_name}/msg/{f.stem}', f.relative_to(pkg_dir)) for f in msgs]
+            pkg_parts += ['## Messages', '', md_interface_table(entries)]
         if srvs:
-            entries = [(f'{pkg_name}/srv/{f.stem}', f.relative_to(repo_root)) for f in srvs]
-            pkg_parts += ['\n## Services\n', md_interface_table(entries)]
+            entries = [(f'{pkg_name}/srv/{f.stem}', f.relative_to(pkg_dir)) for f in srvs]
+            pkg_parts += ['', '## Services', '', md_interface_table(entries)]
         if actions:
-            entries = [(f'{pkg_name}/action/{f.stem}', f.relative_to(repo_root)) for f in actions]
-            pkg_parts += ['\n## Actions\n', md_interface_table(entries)]
+            entries = [(f'{pkg_name}/action/{f.stem}', f.relative_to(pkg_dir)) for f in actions]
+            pkg_parts += ['', '## Actions', '', md_interface_table(entries)]
 
         if node_sources or launch_files:
             headers = find_headers(pkg_dir)
             member_var_map = build_member_var_map(headers)
             type_aliases = build_type_alias_map(headers)
-
-            if launch_files:
-                pkg_parts += ['\n## Launch Files\n', render_launch_files(launch_files, repo_root)]
 
             for source_file in node_sources:
                 source = source_file.read_text(errors='replace')
@@ -576,17 +488,28 @@ def main():
                     action_clients=extract_action_clients(source, type_aliases),
                     parameters=resolve_parameters(extract_raw_parameters(source), member_var_map),
                 )
-                pkg_parts.append('\n' + render_node(node))
+                nodes.append(node)
 
-        output_blocks.append('\n'.join(pkg_parts))
+            if nodes:
+                pkg_parts += ['', '## Nodes', '']
+                for idx, node in enumerate(nodes):
+                    if idx > 0:
+                        pkg_parts.append('')
+                    pkg_parts.append(render_node(node))
 
-    generated = shift_headings('\n\n'.join(output_blocks), 2)
-    readme_path = repo_root / 'README.md'
-    old_content = readme_path.read_text() if readme_path.exists() else ''
-    update_readme(readme_path, generated, source_docs_url=get_github_pages_url(repo_root))
-    new_content = readme_path.read_text()
-    sys.stderr.write(f'Updated {readme_path}\n')
-    print_diff(old_content, new_content, readme_path)
+            if launch_files:
+                pkg_parts += ['', '## Launch Files', '', render_launch_files(launch_files, pkg_dir)]
+
+        generated = '\n'.join(pkg_parts).strip()
+        toc = render_toc([node.node_name for node in nodes], bool(launch_files))
+        if toc:
+            generated = f'{toc}\n\n{generated}'
+        readme_path = pkg_dir / 'README.md'
+        old_content = readme_path.read_text() if readme_path.exists() else ''
+        new_content = render_package_readme(pkg_name, pkg_description, generated)
+        readme_path.write_text(new_content)
+        sys.stderr.write(f'Updated {readme_path}\n')
+        print_diff(old_content, new_content, readme_path)
 
 
 if __name__ == '__main__':
