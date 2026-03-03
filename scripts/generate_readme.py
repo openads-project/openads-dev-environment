@@ -15,10 +15,20 @@ import difflib
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 from xml.etree import ElementTree
+
+try:
+    from jinja2 import Environment, FileSystemLoader, TemplateNotFound
+except ModuleNotFoundError as exc:
+    if exc.name == 'jinja2':
+        Environment = None
+        FileSystemLoader = None
+        TemplateNotFound = Exception
+    else:
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +80,41 @@ class RepoMetadata:
     pages_url: str
     repo_https_url: str
     container_image: str
+
+
+@dataclass
+class PackageSection:
+    title: str
+    body: str
+
+
+@dataclass
+class PackageTemplateContext:
+    package_name: str
+    package_description: str
+    toc_lines: list[str]
+    sections: list[PackageSection]
+
+
+@dataclass
+class PackageDocEntry:
+    name: str
+    path: str
+
+
+@dataclass
+class TopLevelTemplateContext:
+    repo_name: str
+    owner: str
+    pages_url: str
+    repo_https_url: str
+    container_image: str
+    badges_block: str
+    intro_block: str
+    quickstart_package: str
+    quickstart_launch_file: str
+    documentation_lines: list[str]
+    acknowledgements_body: str
 
 
 # ---------------------------------------------------------------------------
@@ -442,13 +487,25 @@ def render_toc(node_names: list, has_launch_files: bool) -> str:
     return '\n'.join(entries)
 
 
-def render_package_readme(package_name: str, package_description: str, package_body: str) -> str:
-    parts = [f'# `{package_name}`']
-    if package_description:
-        parts += ['', package_description]
-    if package_body.strip():
-        parts += ['', package_body.strip()]
-    return '\n'.join(parts).rstrip() + '\n'
+def render_package_readme(
+    template_env: Environment,
+    package_name: str,
+    package_description: str,
+    toc_lines: list[str],
+    sections: list[PackageSection],
+) -> str:
+    context = PackageTemplateContext(
+        package_name=package_name,
+        package_description=package_description,
+        toc_lines=toc_lines,
+        sections=sections,
+    )
+    rendered = render_template(
+        template_env,
+        'package_readme.md.j2',
+        asdict(context),
+    )
+    return rendered.rstrip() + '\n'
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +518,30 @@ INTRO_PLACEHOLDER = (
 )
 
 ACK_PLACEHOLDER = 'TODO: Project/funding acknowledgements'
+
+
+def build_template_environment() -> Environment:
+    if Environment is None or FileSystemLoader is None:
+        raise RuntimeError(
+            'Missing dependency: jinja2. Install with '
+            '`pip install -r .dev-environment/scripts/requirements.txt`.'
+        )
+    templates_dir = Path(__file__).resolve().parent / 'templates'
+    return Environment(
+        loader=FileSystemLoader(str(templates_dir)),
+        autoescape=False,
+        keep_trailing_newline=True,
+        trim_blocks=False,
+        lstrip_blocks=False,
+    )
+
+
+def render_template(template_env: Environment, template_name: str, context: dict) -> str:
+    try:
+        template = template_env.get_template(template_name)
+    except TemplateNotFound as exc:
+        raise RuntimeError(f'Missing template: {template_name}') from exc
+    return template.render(**context)
 
 
 def get_origin_remote(repo_root: Path) -> str:
@@ -509,7 +590,7 @@ def extract_acknowledgements_body(readme_text: str) -> str:
 def render_badges(meta: RepoMetadata) -> str:
     return (
         '<p align="center">\n'
-        f'  <a href="https://{meta.owner_lower}.github.io"><img src="https://img.shields.io/badge/OpenADS-ffff00"/></a>\n'
+        f'  <a href="https://github.com/{meta.owner_lower}"><img src="https://img.shields.io/badge/OpenADS-ffff00"/></a>\n'
         f'  <a href="{meta.repo_https_url}/releases/latest"><img src="https://img.shields.io/github/v/release/{meta.owner}/{meta.repo}"/></a>\n'
         f'  <a href="{meta.repo_https_url}/blob/main/LICENSE"><img src="https://img.shields.io/github/license/{meta.owner}/{meta.repo}"/></a>\n'
         '  <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>\n'
@@ -521,17 +602,28 @@ def render_badges(meta: RepoMetadata) -> str:
     )
 
 
-def render_documentation_section(repo_root: Path, meta: RepoMetadata, packages: list) -> str:
-    lines = ['## 📝 Documentation', '']
+def build_package_doc_entries(repo_root: Path, packages: list) -> list[PackageDocEntry]:
+    entries = []
+    for pkg_name, pkg_dir, _ in sorted(packages, key=lambda p: p[0]):
+        rel_readme = (pkg_dir / 'README.md').relative_to(repo_root).as_posix()
+        entries.append(PackageDocEntry(name=pkg_name, path=rel_readme))
+    return entries
+
+
+def build_documentation_lines(
+    repo_root: Path,
+    pages_url: str,
+    package_doc_entries: list[PackageDocEntry],
+) -> list[str]:
+    lines = []
     implementation_details = repo_root / 'docs' / 'IMPLEMENTATION.md'
     if implementation_details.exists():
         lines.append('- [Implementation Details](./docs/IMPLEMENTATION.md)')
-    lines.append(f'- [Source Code Documentation]({meta.pages_url})')
+    lines.append(f'- [Source Code Documentation]({pages_url})')
     lines.append('- Package Documentation')
-    for pkg_name, pkg_dir, _ in sorted(packages, key=lambda p: p[0]):
-        rel_readme = (pkg_dir / 'README.md').relative_to(repo_root).as_posix()
-        lines.append(f'  - [{pkg_name}]({rel_readme})')
-    return '\n'.join(lines)
+    for entry in package_doc_entries:
+        lines.append(f'  - [{entry.name}]({entry.path})')
+    return lines
 
 
 def pick_quickstart_target(packages: list) -> tuple[str, str]:
@@ -543,67 +635,38 @@ def pick_quickstart_target(packages: list) -> tuple[str, str]:
     return 'PACKAGE_NAME', 'LAUNCH_FILE'
 
 
-def render_top_level_readme(repo_root: Path, packages: list, existing_readme: str) -> str:
+def render_top_level_readme(
+    template_env: Environment,
+    repo_root: Path,
+    packages: list,
+    existing_readme: str,
+) -> str:
     remote = get_origin_remote(repo_root)
     meta = parse_github_remote(remote)
     intro_block = extract_intro_block(existing_readme)
     ack_body = extract_acknowledgements_body(existing_readme)
     quickstart_pkg, quickstart_launch_file = pick_quickstart_target(packages)
-    docs_section = render_documentation_section(repo_root, meta, packages)
-
-    return (
-        f'# {meta.repo}\n\n'
-        f'{render_badges(meta)}\n\n'
-        f'{intro_block}\n\n'
-        '> [!IMPORTANT]  \n'
-        f'> This repository is part of [🚗 ***OpenADS***](https://github.com/{meta.owner}), the *Open Automated Driving Stack*.\n\n'
-        '**🚀 [Quick Start](#-quick-start)** | **🧑‍💻 [Development](#-development)** | **📝 [Documentation](#-documentation)** | **🙏 [Acknowledgements](#-acknowledgements)**\n\n\n'
-        '## 🚀 Quick Start\n\n'
-        '1. Start a container of the pre-built runtime image.\n'
-        '    ```bash\n'
-        f'    docker run --rm -it {meta.container_image} bash\n'
-        '    ```\n'
-        '1. Inside the container, launch the pre-built nodes.\n'
-        '    ```bash\n'
-        f'    ros2 launch {quickstart_pkg} {quickstart_launch_file}\n'
-        '    ```\n\n'
-        '## 🧑‍💻 Development\n\n'
-        '### Set up Development Environment\n\n'
-        '1. Clone the repository.\n'
-        '    ```bash\n'
-        f'    git clone {meta.repo_https_url}.git\n'
-        '    ```\n'
-        f'1. Initialize the [`.dev-environment`](https://github.com/{meta.owner}/dev-environment) submodule containing development environment configuration.\n'
-        '    ```bash\n'
-        f'    cd {meta.repo}\n'
-        '    git submodule update --init --recursive\n'
-        '    ```\n'
-        '1. Open the repository in [Visual Studio Code](https://code.visualstudio.com).\n'
-        '    ```bash\n'
-        '    code .\n'
-        '    ```\n'
-        '1. Install the recommended VS Code extensions.  \n'
-        '    > *Ctrl+Shift+P / Extensions: Show Recommended Extensions / Install Workspace Recommended Extensions (Cloud Download Icon)*\n'
-        '1. Reopen the repository in a [Dev Container](https://code.visualstudio.com/docs/devcontainers/containers).\n'
-        '    > *Ctrl+Shift+P / Dev Containers: Rebuild and Reopen in Container*\n\n'
-        '### Build\n\n'
-        '> *Ctrl+Shift+B*\n\n'
-        'or\n\n'
-        '```bash\n'
-        'colcon build\n'
-        '```\n\n'
-        '### Run Tests\n\n'
-        '> *Ctrl+Shift+P / Tasks: Run Test Task*\n\n'
-        'or\n\n'
-        '```bash\n'
-        'colcon build --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1\n'
-        'colcon test\n'
-        'colcon test-result --verbose\n'
-        '```\n\n\n'
-        f'{docs_section}\n\n\n'
-        '## 🙏 Acknowledgements\n\n'
-        f'{ack_body}\n'
+    package_doc_entries = build_package_doc_entries(repo_root, packages)
+    documentation_lines = build_documentation_lines(repo_root, meta.pages_url, package_doc_entries)
+    context = TopLevelTemplateContext(
+        repo_name=meta.repo,
+        owner=meta.owner,
+        pages_url=meta.pages_url,
+        repo_https_url=meta.repo_https_url,
+        container_image=meta.container_image,
+        badges_block=render_badges(meta),
+        intro_block=intro_block,
+        quickstart_package=quickstart_pkg,
+        quickstart_launch_file=quickstart_launch_file,
+        documentation_lines=documentation_lines,
+        acknowledgements_body=ack_body,
     )
+    rendered = render_template(
+        template_env,
+        'top_level_readme.md.j2',
+        asdict(context),
+    )
+    return rendered.rstrip() + '\n'
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +675,11 @@ def render_top_level_readme(repo_root: Path, packages: list, existing_readme: st
 
 def main():
     repo_root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent.parent
+    try:
+        template_env = build_template_environment()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
 
     packages = find_packages(repo_root)
     if not packages:
@@ -624,18 +692,18 @@ def main():
         node_sources = find_node_sources(pkg_dir)
         launch_files = find_launch_files(pkg_dir)
 
-        pkg_parts = []
+        sections = []
         nodes = []
 
         if msgs:
             entries = [(f'{pkg_name}/msg/{f.stem}', f.relative_to(pkg_dir)) for f in msgs]
-            pkg_parts += ['## Messages', '', md_interface_table(entries)]
+            sections.append(PackageSection(title='Messages', body=md_interface_table(entries)))
         if srvs:
             entries = [(f'{pkg_name}/srv/{f.stem}', f.relative_to(pkg_dir)) for f in srvs]
-            pkg_parts += ['', '## Services', '', md_interface_table(entries)]
+            sections.append(PackageSection(title='Services', body=md_interface_table(entries)))
         if actions:
             entries = [(f'{pkg_name}/action/{f.stem}', f.relative_to(pkg_dir)) for f in actions]
-            pkg_parts += ['', '## Actions', '', md_interface_table(entries)]
+            sections.append(PackageSection(title='Actions', body=md_interface_table(entries)))
 
         if node_sources or launch_files:
             headers = find_headers(pkg_dir)
@@ -656,29 +724,36 @@ def main():
                 nodes.append(node)
 
             if nodes:
-                pkg_parts += ['', '## Nodes', '']
+                node_parts = []
                 for idx, node in enumerate(nodes):
                     if idx > 0:
-                        pkg_parts.append('')
-                    pkg_parts.append(render_node(node))
+                        node_parts.append('')
+                    node_parts.append(render_node(node))
+                sections.append(PackageSection(title='Nodes', body='\n'.join(node_parts)))
 
             if launch_files:
-                pkg_parts += ['', '## Launch Files', '', render_launch_files(launch_files, pkg_dir)]
+                sections.append(
+                    PackageSection(title='Launch Files', body=render_launch_files(launch_files, pkg_dir))
+                )
 
-        generated = '\n'.join(pkg_parts).strip()
         toc = render_toc([node.node_name for node in nodes], bool(launch_files))
-        if toc:
-            generated = f'{toc}\n\n{generated}'
+        toc_lines = toc.splitlines() if toc else []
         readme_path = pkg_dir / 'README.md'
         old_content = readme_path.read_text() if readme_path.exists() else ''
-        new_content = render_package_readme(pkg_name, pkg_description, generated)
+        new_content = render_package_readme(
+            template_env=template_env,
+            package_name=pkg_name,
+            package_description=pkg_description,
+            toc_lines=toc_lines,
+            sections=sections,
+        )
         readme_path.write_text(new_content)
         sys.stderr.write(f'Updated {readme_path}\n')
         print_diff(old_content, new_content, readme_path)
 
     root_readme_path = repo_root / 'README.md'
     old_root_readme = root_readme_path.read_text() if root_readme_path.exists() else ''
-    new_root_readme = render_top_level_readme(repo_root, packages, old_root_readme)
+    new_root_readme = render_top_level_readme(template_env, repo_root, packages, old_root_readme)
     root_readme_path.write_text(new_root_readme)
     sys.stderr.write(f'Updated {root_readme_path}\n')
     print_diff(old_root_readme, new_root_readme, root_readme_path)
