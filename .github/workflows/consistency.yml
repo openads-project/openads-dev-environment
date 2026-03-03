@@ -1,0 +1,15 @@
+name: consistency
+
+on:
+  workflow_call:
+
+jobs:
+  consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Run consistency checks
+        run: python3 .dev-environment/scripts/check_repository_consistency.py

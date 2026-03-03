@@ -7,10 +7,12 @@ jobs:
   industrial_ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: ros-industrial/industrial_ci@master
+      - name: Run industrial_ci
+        uses: ros-industrial/industrial_ci@master
         env:
           ROS_DISTRO: jazzy
           TARGET_CMAKE_ARGS: -DCMAKE_EXPORT_COMPILE_COMMANDS=1
