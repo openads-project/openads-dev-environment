@@ -12,6 +12,6 @@ jobs:
         with:
           submodules: true
       - name: Install script dependencies
-        run: python3 -m pip install -r .dev-environment/scripts/requirements.txt
+        run: python3 -m pip install -r .openads-dev-environment/scripts/requirements.txt
       - name: Run consistency checks
-        run: python3 .dev-environment/scripts/check_repository_consistency.py
+        run: python3 .openads-dev-environment/scripts/check_repository_consistency.py

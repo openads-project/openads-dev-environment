@@ -524,7 +524,7 @@ def build_template_environment() -> Environment:
     if Environment is None or FileSystemLoader is None:
         raise RuntimeError(
             'Missing dependency: jinja2. Install with '
-            '`pip install -r .dev-environment/scripts/requirements.txt`.'
+            '`pip install -r .openads-dev-environment/scripts/requirements.txt`.'
         )
     templates_dir = Path(__file__).resolve().parent / 'templates'
     return Environment(

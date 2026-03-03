@@ -2,7 +2,7 @@
 """Repository consistency checks.
 
 Usage:
-    python3 .dev-environment/scripts/check_repository_consistency.py \
+    python3 .openads-dev-environment/scripts/check_repository_consistency.py \
         [--repo-root PATH] [--only ID[,ID...]] [--skip ID[,ID...]]
 """
 
@@ -177,9 +177,9 @@ def check_ros_nodes_have_parameter_loader(ctx: CheckContext) -> CheckResult:
 
 def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
     expected_links = {
-        ".devcontainer": ".dev-environment/.devcontainer/",
-        ".vscode": ".dev-environment/.vscode/",
-        ".pre-commit-config.yaml": ".dev-environment/.pre-commit-config.yaml",
+        ".devcontainer": ".openads-dev-environment/.devcontainer/",
+        ".vscode": ".openads-dev-environment/.vscode/",
+        ".pre-commit-config.yaml": ".openads-dev-environment/.pre-commit-config.yaml",
     }
 
     errors: list[str] = []
@@ -220,14 +220,14 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
 
 
 def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
-    submodule_dir = ctx.repo_root / ".dev-environment"
+    submodule_dir = ctx.repo_root / ".openads-dev-environment"
 
     if not submodule_dir.exists() or not submodule_dir.is_dir():
         return CheckResult(
             check_id="dev_environment_at_remote_main",
-            name=".dev-environment matches origin/main",
+            name=".openads-dev-environment matches origin/main",
             passed=False,
-            message=".dev-environment directory is missing",
+            message=".openads-dev-environment directory is missing",
             details=[str(submodule_dir)],
         )
 
@@ -235,9 +235,9 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
     if git_dir_check.returncode != 0:
         return CheckResult(
             check_id="dev_environment_at_remote_main",
-            name=".dev-environment matches origin/main",
+            name=".openads-dev-environment matches origin/main",
             passed=False,
-            message=".dev-environment is not a git repository",
+            message=".openads-dev-environment is not a git repository",
             details=[git_dir_check.stderr.strip() or "git metadata missing"],
         )
 
@@ -245,9 +245,9 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
     if local_head.returncode != 0:
         return CheckResult(
             check_id="dev_environment_at_remote_main",
-            name=".dev-environment matches origin/main",
+            name=".openads-dev-environment matches origin/main",
             passed=False,
-            message="Failed to resolve local .dev-environment HEAD",
+            message="Failed to resolve local .openads-dev-environment HEAD",
             details=[local_head.stderr.strip() or "unknown error"],
         )
 
@@ -255,9 +255,9 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
     if remote_main.returncode != 0:
         return CheckResult(
             check_id="dev_environment_at_remote_main",
-            name=".dev-environment matches origin/main",
+            name=".openads-dev-environment matches origin/main",
             passed=False,
-            message="Failed to query remote origin/main for .dev-environment",
+            message="Failed to query remote origin/main for .openads-dev-environment",
             details=[remote_main.stderr.strip() or "unknown error"],
         )
 
@@ -265,7 +265,7 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
     if not remote_line:
         return CheckResult(
             check_id="dev_environment_at_remote_main",
-            name=".dev-environment matches origin/main",
+            name=".openads-dev-environment matches origin/main",
             passed=False,
             message="Remote origin/main ref was not found",
             details=["git ls-remote returned no refs for refs/heads/main"],
@@ -277,7 +277,7 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
     if local_hash != remote_hash:
         return CheckResult(
             check_id="dev_environment_at_remote_main",
-            name=".dev-environment matches origin/main",
+            name=".openads-dev-environment matches origin/main",
             passed=False,
             message="Submodule HEAD does not match remote origin/main",
             details=[f"local HEAD : {local_hash}", f"origin/main: {remote_hash}"],
@@ -285,7 +285,7 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
 
     return CheckResult(
         check_id="dev_environment_at_remote_main",
-        name=".dev-environment matches origin/main",
+        name=".openads-dev-environment matches origin/main",
         passed=True,
         message="Submodule HEAD matches remote origin/main",
         details=[],
@@ -293,7 +293,7 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
 
 
 def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
-    generator_script = ctx.repo_root / ".dev-environment" / "scripts" / "generate_readme.py"
+    generator_script = ctx.repo_root / ".openads-dev-environment" / "scripts" / "generate_readme.py"
     if not generator_script.exists():
         return CheckResult(
             check_id="readme_generator_is_idempotent",
@@ -383,7 +383,7 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
         check_required_top_level_symlinks,
     ),
     "dev_environment_at_remote_main": (
-        ".dev-environment matches origin/main",
+        ".openads-dev-environment matches origin/main",
         check_dev_environment_at_remote_main,
     ),
     "readme_generator_is_idempotent": (
@@ -404,7 +404,7 @@ def resolve_repo_root(cli_repo_root: str | None) -> Path:
         return Path(cli_repo_root).resolve()
 
     script_path = Path(__file__).resolve()
-    # .../<repo>/.dev-environment/scripts/check_repository_consistency.py
+    # .../<repo>/.openads-dev-environment/scripts/check_repository_consistency.py
     return script_path.parents[2]
 
 
