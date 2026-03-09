@@ -15,7 +15,18 @@ This repository defines a common development environment for components of [🚗
     ```bash
     git submodule add https://github.com/oads-org/openads-dev-environment.git .openads-dev-environment
     ```
-1. Install the recommended VS Code extensions.  
+2. Create symbolic links to the relevant files and folders.
+    ```bash
+    ln -s .openads-dev-environment/.vscode .vscode
+    ln -s .openads-dev-environment/.devcontainer .devcontainer
+    ln -s .openads-dev-environment/.pre-commit-config.yaml .pre-commit-config.yaml
+    ```
+3. Copy the template GitHub CI workflow definitions.
+    ```bash
+    mkdir -p .github/workflows
+    cp .openads-dev-environment/.github/workflow_calls/*.yml .github/workflows/
+    ```
+4. Install the recommended VS Code extensions.  
     > *Ctrl+Shift+P / Extensions: Show Recommended Extensions / Install Workspace Recommended Extensions (Cloud Download Icon)*
 
 ## Usage
