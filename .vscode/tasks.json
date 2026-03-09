@@ -53,7 +53,7 @@
 
     {
       "label": "New ROS 2 Package",
-      "detail": "Creates a new ROS 2 package using 'ros2 pkg create'",
+      "detail": "Creates a new ROS 2 package using 'ros2-pkg-create'",
       "type": "shell",
       "command": "ros2-pkg-create --template ${input:ros2_pkg_create_template} .",
       "problemMatcher": []
