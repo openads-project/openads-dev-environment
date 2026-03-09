@@ -21,7 +21,6 @@
   "workspaceFolder": "/docker-ros/ws/src/target",
 
   // mount host AI auth/config into container to persist login
-  // TODO: what happens if these are not present on the host?
   "mounts": [
     "source=${localEnv:HOME}/.claude,target=/home/dockeruser/.claude,type=bind",
     "source=${localEnv:HOME}/.codex,target=/home/dockeruser/.codex,type=bind"

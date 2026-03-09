@@ -21,5 +21,5 @@
   "python.autoComplete.extraPaths": [
     "/opt/ros/${env:ROS_DISTRO}/lib/python3.12/site-packages"
   ],
-  "ROS2.distro": "{{ ros_distro }}",
+  "ROS2.distro": "jazzy",
 }
