@@ -1,19 +1,19 @@
 # openads-dev-environment
 
 <p align="center">
-  <a href="https://github.com/oads-org"><img src="https://img.shields.io/badge/OpenADS-ffff00"/></a>
-  <a href="https://github.com/oads-org/openads_ros2_demo_repository/blob/main/LICENSE"><img src="https://img.shields.io/github/license/oads-org/openads_ros2_demo_repository"/></a>
+  <a href="https://github.com/openads-project"><img src="https://img.shields.io/badge/OpenADS-ffff00"/></a>
+  <a href="https://github.com/openads-project/openads_ros2_demo_repository/blob/main/LICENSE"><img src="https://img.shields.io/github/license/openads-project/openads_ros2_demo_repository"/></a>
   <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>
 </p>
 
-This repository defines a common development environment for components of [🚗 ***OpenADS***](https://github.com/oads-org), the *Open Automated Driving Stack*.
+This repository defines a common development environment for components of [🚗 ***OpenADS***](https://github.com/openads-project), the *Open Automated Driving Stack*.
 
 
 ## Installation
 
 1. Add this repository as a Git submodule named `.openads-dev-environment` to the root of any other repository that you would like to use these settings for.
     ```bash
-    git submodule add https://github.com/oads-org/openads-dev-environment.git .openads-dev-environment
+    git submodule add https://github.com/openads-project/openads-dev-environment.git .openads-dev-environment
     ```
 2. Create symbolic links to the relevant files and folders.
     ```bash
