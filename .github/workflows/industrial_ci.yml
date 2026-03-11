@@ -12,8 +12,13 @@ jobs:
         with:
           submodules: true
           lfs: true
+      - name: Set up industrial_ci
+        if: ${{ inputs.enable-industrial-ci == 'true' }}
+        shell: bash
+        run: test -f ${{ github.workspace }}/.repos || echo "repositories:" > ${{ github.workspace }}/.repos
       - name: Run industrial_ci
         uses: ros-industrial/industrial_ci@master
         env:
           ROS_DISTRO: jazzy
           TARGET_CMAKE_ARGS: -DCMAKE_EXPORT_COMPILE_COMMANDS=1
+          UPSTREAM_WORKSPACE: ${{ github.workspace }}/.repos
