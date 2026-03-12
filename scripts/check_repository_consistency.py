@@ -219,6 +219,92 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
+    required_workflows = (
+        "docker-ros.yml",
+        "docs.yml",
+        "industrial_ci.yml",
+        "consistency.yml",
+    )
+    workflows_dir = ctx.repo_root / ".github" / "workflows"
+
+    missing = [
+        str((workflows_dir / workflow).relative_to(ctx.repo_root))
+        for workflow in required_workflows
+        if not (workflows_dir / workflow).is_file()
+    ]
+
+    if missing:
+        return CheckResult(
+            check_id="required_root_ci_workflows",
+            name="Required root CI workflow files",
+            passed=False,
+            message="Required root CI workflow files are missing",
+            details=missing,
+        )
+
+    return CheckResult(
+        check_id="required_root_ci_workflows",
+        name="Required root CI workflow files",
+        passed=True,
+        message="All required root CI workflow files are present",
+        details=[],
+    )
+
+
+def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
+    workflow_files = (
+        "docs.yml",
+        "industrial_ci.yml",
+        "consistency.yml",
+    )
+    root_workflows_dir = ctx.repo_root / ".github" / "workflows"
+    template_workflows_dir = (
+        ctx.repo_root / ".openads-dev-environment" / ".github" / "workflow_calls"
+    )
+
+    errors: list[str] = []
+    for workflow_name in workflow_files:
+        root_path = root_workflows_dir / workflow_name
+        template_path = template_workflows_dir / workflow_name
+
+        if not root_path.is_file():
+            errors.append(f"missing root workflow: {root_path.relative_to(ctx.repo_root)}")
+            continue
+        if not template_path.is_file():
+            errors.append(f"missing workflow template: {template_path.relative_to(ctx.repo_root)}")
+            continue
+
+        if root_path.read_bytes() != template_path.read_bytes():
+            errors.append(
+                "content mismatch: "
+                f"{root_path.relative_to(ctx.repo_root)} != {template_path.relative_to(ctx.repo_root)}"
+            )
+
+    if errors:
+        return CheckResult(
+            check_id="root_ci_workflows_match_templates",
+            name="Root CI workflows match workflow_call templates",
+            passed=False,
+            message=(
+                "Root CI workflows (excluding docker-ros.yml) do not exactly match "
+                "workflow_call templates"
+            ),
+            details=errors,
+        )
+
+    return CheckResult(
+        check_id="root_ci_workflows_match_templates",
+        name="Root CI workflows match workflow_call templates",
+        passed=True,
+        message=(
+            "Root CI workflows (excluding docker-ros.yml) exactly match "
+            "workflow_call templates"
+        ),
+        details=[],
+    )
+
+
 def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
     submodule_dir = ctx.repo_root / ".openads-dev-environment"
 
@@ -382,6 +468,14 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
         "Required top-level symlinks",
         check_required_top_level_symlinks,
     ),
+    "required_root_ci_workflows": (
+        "Required root CI workflow files",
+        check_required_root_ci_workflows,
+    ),
+    "root_ci_workflows_match_templates": (
+        "Root CI workflows match workflow_call templates",
+        check_root_ci_workflows_match_templates,
+    ),
     "dev_environment_at_remote_main": (
         ".openads-dev-environment matches origin/main",
         check_dev_environment_at_remote_main,
@@ -468,7 +562,8 @@ def print_report(ctx: CheckContext, results: list[CheckResult]) -> None:
     if failed:
         print("\nFailure details:")
         for result in failed:
-            print(f"- {result.check_id}")
+            colored_check_id = colorize(result.check_id, ANSI_RED, colors_enabled)
+            print(f"- {colored_check_id}")
             if result.details:
                 for detail in result.details:
                     print(f"  - {detail}")
