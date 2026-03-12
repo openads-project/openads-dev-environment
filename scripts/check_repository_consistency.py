@@ -549,6 +549,42 @@ def check_no_top_level_package_xml(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_top_level_license_apache2(ctx: CheckContext) -> CheckResult:
+    license_path = ctx.repo_root / "LICENSE"
+    if not license_path.is_file():
+        return CheckResult(
+            check_id="top_level_license_apache2",
+            name='Top-level "LICENSE" with Apache 2.0',
+            passed=False,
+            message='Top-level "LICENSE" file is missing',
+            details=[str(license_path.relative_to(ctx.repo_root))],
+        )
+
+    license_text = read_text(license_path)
+    required_markers = (
+        "Apache License",
+        "Version 2.0, January 2004",
+        "http://www.apache.org/licenses/",
+    )
+    missing_markers = [marker for marker in required_markers if marker not in license_text]
+    if missing_markers:
+        return CheckResult(
+            check_id="top_level_license_apache2",
+            name='Top-level "LICENSE" with Apache 2.0',
+            passed=False,
+            message='Top-level "LICENSE" does not appear to contain Apache 2.0 text',
+            details=[f"Missing marker: {marker}" for marker in missing_markers],
+        )
+
+    return CheckResult(
+        check_id="top_level_license_apache2",
+        name='Top-level "LICENSE" with Apache 2.0',
+        passed=True,
+        message='Top-level "LICENSE" exists and contains Apache 2.0 markers',
+        details=[],
+    )
+
+
 def check_ros_nodes_have_parameter_loader(ctx: CheckContext) -> CheckResult:
     offending: list[str] = []
 
@@ -929,6 +965,10 @@ def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
 
 CHECKS: dict[str, tuple[str, CheckFn]] = {
     "no_top_level_package_xml": ("No top-level package.xml", check_no_top_level_package_xml),
+    "top_level_license_apache2": (
+        'Top-level "LICENSE" with Apache 2.0',
+        check_top_level_license_apache2,
+    ),
     "ros_nodes_have_parameter_loader": (
         "ROS nodes define parameter loader helper",
         check_ros_nodes_have_parameter_loader,
