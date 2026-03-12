@@ -74,6 +74,8 @@ class NodeInterfaces:
 
 @dataclass
 class RepoMetadata:
+    host: str
+    provider: str
     owner: str
     repo: str
     owner_lower: str
@@ -139,8 +141,18 @@ def cpp_param_type(cpp_type: str) -> str:
         return 'bool'
     if t == 'std::string':
         return 'string'
-    if 'vector' in t:
-        return 'string[]'
+    vector_match = re.match(r'std::vector\s*<\s*([^>]+)\s*>', t)
+    if vector_match:
+        element_type = vector_match.group(1).strip()
+        if element_type in ('double', 'float'):
+            return 'float[]'
+        if element_type in ('int', 'long', 'long int', 'int64_t', 'uint64_t'):
+            return 'int[]'
+        if element_type == 'bool':
+            return 'bool[]'
+        if element_type == 'std::string':
+            return 'string[]'
+        return f'{element_type}[]'
     return t
 
 
@@ -148,7 +160,10 @@ def format_default(default_str: Optional[str], cpp_type: str) -> str:
     """Format a C++ default value for Markdown display."""
     if default_str is None:
         return '[]' if 'vector' in cpp_type else ''
-    return default_str.strip()
+    formatted = default_str.strip()
+    if 'vector' in cpp_type and formatted.startswith('{') and formatted.endswith('}'):
+        return f'[{formatted[1:-1].strip()}]'
+    return formatted
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +343,7 @@ def build_member_var_map(headers: list) -> dict:
     """Return {var_name: (cpp_type, default_str)} from member variable declarations."""
     pattern = re.compile(
         r'\b(double|float|int|bool|std::string|std::vector\s*<[^>]+>)\s+(\w+_)\s*'
-        r'(?:=\s*([^;{]+))?;'
+        r'(?:=\s*([^;]+))?;'
     )
     result = {}
     for header in headers:
@@ -554,20 +569,45 @@ def get_origin_remote(repo_root: Path) -> str:
     ).strip()
 
 
-def parse_github_remote(remote: str) -> RepoMetadata:
-    """Extract owner/repo metadata from GitHub-style remote URL."""
-    m = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$', remote)
-    if not m:
+def parse_repo_remote(remote: str) -> RepoMetadata:
+    """Extract repository metadata from HTTPS and SSH git remotes."""
+    remote = remote.strip()
+
+    url_match = re.match(r'^[a-z][a-z0-9+.-]*://(?:(?:[^@/]+)@)?([^/]+)/(.+?)(?:\.git)?/?$', remote, re.IGNORECASE)
+    ssh_match = re.match(r'^(?:[^@]+@)?([^:]+):(.+?)(?:\.git)?$', remote)
+
+    if url_match:
+        host, path = url_match.group(1), url_match.group(2)
+    elif ssh_match:
+        host, path = ssh_match.group(1), ssh_match.group(2)
+    else:
         raise ValueError(f'Unsupported origin remote URL: {remote}')
-    owner, repo = m.group(1), m.group(2)
+
+    path_parts = [part for part in path.split('/') if part]
+    if len(path_parts) < 2:
+        raise ValueError(f'Unsupported origin remote URL: {remote}')
+
+    owner = '/'.join(path_parts[:-1])
+    repo = path_parts[-1]
     owner_lower = owner.lower()
+    provider = 'github' if host.lower() == 'github.com' else 'other'
+    repo_https_url = f'https://{host}/{path}'
+
+    pages_url = ''
+    container_image = 'TODO'
+    if provider == 'github':
+        pages_url = f'https://{owner_lower}.github.io/{repo}'
+        container_image = f'ghcr.io/{owner_lower}/{repo}:latest'
+
     return RepoMetadata(
+        host=host,
+        provider=provider,
         owner=owner,
         repo=repo,
         owner_lower=owner_lower,
-        pages_url=f'https://{owner_lower}.github.io/{repo}',
-        repo_https_url=f'https://github.com/{owner}/{repo}',
-        container_image=f'ghcr.io/{owner_lower}/{repo}:latest',
+        pages_url=pages_url,
+        repo_https_url=repo_https_url,
+        container_image=container_image,
     )
 
 
@@ -588,19 +628,23 @@ def extract_acknowledgements_body(readme_text: str) -> str:
 
 
 def render_badges(meta: RepoMetadata) -> str:
-    return (
-        '<p align="center">\n'
-        f'  <a href="https://github.com/{meta.owner_lower}"><img src="https://img.shields.io/badge/OpenADS-ffff00"/></a>\n'
-        f'  <a href="{meta.repo_https_url}/releases/latest"><img src="https://img.shields.io/github/v/release/{meta.owner}/{meta.repo}"/></a>\n'
-        f'  <a href="{meta.repo_https_url}/blob/main/LICENSE"><img src="https://img.shields.io/github/license/{meta.owner}/{meta.repo}"/></a>\n'
-        '  <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>\n'
-        '  <br>\n'
-        f'  <a href="{meta.repo_https_url}/actions/workflows/docker-ros.yml"><img src="{meta.repo_https_url}/actions/workflows/docker-ros.yml/badge.svg"/></a>\n'
-        f'  <a href="{meta.repo_https_url}/actions/workflows/industrial_ci.yml"><img src="{meta.repo_https_url}/actions/workflows/industrial_ci.yml/badge.svg"/></a>\n'
-        f'  <a href="https://{meta.owner}.github.io/{meta.repo}"><img src="{meta.repo_https_url}/actions/workflows/docs.yml/badge.svg"/></a>\n'
-        f'  <a href="{meta.repo_https_url}/actions/workflows/consistency.yml"><img src="{meta.repo_https_url}/actions/workflows/consistency.yml/badge.svg"/></a>\n'
-        '</p>'
-    )
+    lines = [
+        '<p align="center">',
+        '  <a href="https://github.com/openads-project"><img src="https://img.shields.io/badge/OpenADS-ffff00"/></a>',
+        '  <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>',
+    ]
+    if meta.provider == 'github':
+        lines.extend([
+            f'  <a href="{meta.repo_https_url}/releases/latest"><img src="https://img.shields.io/github/v/release/{meta.owner}/{meta.repo}"/></a>',
+            f'  <a href="{meta.repo_https_url}/blob/main/LICENSE"><img src="https://img.shields.io/github/license/{meta.owner}/{meta.repo}"/></a>',
+            '  <br>',
+            f'  <a href="{meta.repo_https_url}/actions/workflows/docker-ros.yml"><img src="{meta.repo_https_url}/actions/workflows/docker-ros.yml/badge.svg"/></a>',
+            f'  <a href="{meta.repo_https_url}/actions/workflows/industrial_ci.yml"><img src="{meta.repo_https_url}/actions/workflows/industrial_ci.yml/badge.svg"/></a>',
+            f'  <a href="{meta.pages_url}"><img src="{meta.repo_https_url}/actions/workflows/docs.yml/badge.svg"/></a>',
+            f'  <a href="{meta.repo_https_url}/actions/workflows/consistency.yml"><img src="{meta.repo_https_url}/actions/workflows/consistency.yml/badge.svg"/></a>',
+        ])
+    lines.append('</p>')
+    return '\n'.join(lines)
 
 
 def build_package_doc_entries(repo_root: Path, packages: list) -> list[PackageDocEntry]:
@@ -620,7 +664,8 @@ def build_documentation_lines(
     implementation_details = repo_root / 'docs' / 'IMPLEMENTATION.md'
     if implementation_details.exists():
         lines.append('- [Implementation Details](./docs/IMPLEMENTATION.md)')
-    lines.append(f'- [Source Code Documentation]({pages_url})')
+    if pages_url:
+        lines.append(f'- [Source Code Documentation]({pages_url})')
     lines.append('- Package Documentation')
     for entry in package_doc_entries:
         lines.append(f'  - [{entry.name}]({entry.path})')
@@ -643,7 +688,7 @@ def render_top_level_readme(
     existing_readme: str,
 ) -> str:
     remote = get_origin_remote(repo_root)
-    meta = parse_github_remote(remote)
+    meta = parse_repo_remote(remote)
     intro_block = extract_intro_block(existing_readme)
     ack_body = extract_acknowledgements_body(existing_readme)
     quickstart_pkg, quickstart_launch_file = pick_quickstart_target(packages)
