@@ -5,7 +5,7 @@
     "editor.tabSize": 2,
   },
   "[python]": {
-    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.defaultFormatter": "ms-python.black-formatter",
     "editor.indentSize": "tabSize",
     "editor.tabSize": 4,
   },
@@ -21,5 +21,13 @@
   "python.autoComplete.extraPaths": [
     "/opt/ros/${env:ROS_DISTRO}/lib/python3.12/site-packages"
   ],
+  "black-formatter.args": [
+    "--line-length",
+    "120"
+  ],
+  "flake8.args": [
+    "--config=${workspaceFolder}/.vscode/lint/ament_flake8.ini"
+  ],
+  "flake8.enabled": true,
   "ROS2.distro": "jazzy",
 }
