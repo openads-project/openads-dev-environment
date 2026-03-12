@@ -21,12 +21,18 @@ This repository defines a common development environment for components of [🚗
     ln -s .openads-dev-environment/.devcontainer .devcontainer
     ln -s .openads-dev-environment/.pre-commit-config.yaml .pre-commit-config.yaml
     ```
-3. Copy the template GitHub CI workflow definitions.
+3. Copy the CI template into your repository. Differ between:
+
+   GitLab:
+    ```bash
+    cp .openads-dev-environment/.gitlab-ci.template.yml .gitlab-ci.yml
+    ```
+   GitHub:
     ```bash
     mkdir -p .github/workflows
     cp .openads-dev-environment/.github/workflow_calls/*.yml .github/workflows/
     ```
-4. Customize the copied `docker-ros.yml` workflow to fit your repository, in particular the `platform`, `base-image` and `command`.
+4. Customize the copied CI definition to fit your repository, in particular `BASE_IMAGE`, `TARGET`, `PLATFORM`, and `COMMAND`.
 5. Install the recommended VS Code extensions.  
     > *Ctrl+Shift+P / Extensions: Show Recommended Extensions / Install Workspace Recommended Extensions (Cloud Download Icon)*
 
@@ -42,7 +48,7 @@ This repository defines a common development environment for components of [🚗
 This repository contains common development environment configuration, including:
 - [.vscode](#vscode) settings, recommended extensions, tasks, and debugging configurations
 - [.devcontainer](#devcontainer) definition for developing and debugging in container images built by [docker-ros](https://github.com/ika-rwth-aachen/docker-ros)
-- [GitHub CI workflow templates](.github/workflows/), including documentation generation and consistency checks
+- CI templates for [GitLab](.gitlab-ci.template.yml) and [GitHub](.github/workflows/), covering the same `docker-ros`, `repository consistency`, and `documentation` content
 - [pre-commit](.pre-commit-config.yaml) configuration for running linting and formatting
 
 ### .vscode
@@ -90,6 +96,12 @@ This repository stores a common [.devcontainer](https://containers.dev/overview)
 #### Usage
 
 Select *Ctrl+Shift+P / Dev Containers: Rebuild and Reopen in Container*. VS Code will automatically build and launch a new development container and open your repository inside this container.
+
+By default, the Dev Container image is derived from your repository `origin`:
+- GitHub repositories use `ghcr.io/<owner>/<repo>:latest-dev`
+- IKA GitLab repositories use `gitlab.ika.rwth-aachen.de:5050/<namespace>/<repo>:latest-dev`
+
+Non-`main` branches append the existing `latest-dev_<branch>_ci` suffix. If the derived image cannot be pulled, the Dev Container helper falls back to building the image locally with `docker-ros`.
 
 #### Customization
 
