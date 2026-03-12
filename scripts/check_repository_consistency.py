@@ -47,6 +47,10 @@ RE_PY_RCLPY_HINT = re.compile(r"\brclpy\b")
 RE_PY_DECLARE_AND_LOAD = re.compile(r"def\s+declare_and_load_parameter\s*\(")
 RE_CPP_STRING_LITERAL = re.compile(r'^(?:u8|u|U|L)?"(?:\\.|[^"\\])*"$')
 RE_PY_STRING_LITERAL = re.compile(r"^[rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\")$")
+RE_KEYWORD_DEFAULT_VALUE = re.compile(
+    r"default_value\s*=\s*([rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"))"
+)
+RE_LAUNCH_EXECUTABLE = re.compile(r"""executable\s*=\s*["']([^"']+)["']""")
 
 ANSI_RESET = "\033[0m"
 ANSI_GREEN = "\033[32m"
@@ -135,6 +139,27 @@ def extract_matching_parenthesized(text: str, open_paren_idx: int) -> tuple[str,
             depth -= 1
             if depth == 0:
                 return text[open_paren_idx + 1 : i], i + 1
+        i += 1
+    return None
+
+
+def extract_matching_bracketed(text: str, open_bracket_idx: int) -> tuple[str, int] | None:
+    if open_bracket_idx >= len(text) or text[open_bracket_idx] != "[":
+        return None
+
+    depth = 1
+    i = open_bracket_idx + 1
+    while i < len(text):
+        ch = text[i]
+        if ch in ("'", '"'):
+            i = skip_string_literal(text, i)
+            continue
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return text[open_bracket_idx + 1 : i], i + 1
         i += 1
     return None
 
@@ -256,6 +281,59 @@ def unquote_string_literal(literal: str) -> str:
     return stripped[quote_idx + 1 : end_idx]
 
 
+def collect_literal_pubsub_topics(text: str, *, cpp: bool) -> set[str]:
+    call_names = ("create_publisher", "create_subscription")
+    literal_matcher = RE_CPP_STRING_LITERAL if cpp else RE_PY_STRING_LITERAL
+    topics: set[str] = set()
+
+    for call_name in call_names:
+        for _, args_text in find_call_args(text, call_name):
+            topic_arg = split_first_argument(args_text)
+            if topic_arg is None:
+                continue
+            if not literal_matcher.fullmatch(topic_arg):
+                continue
+            topics.add(unquote_string_literal(topic_arg))
+    return topics
+
+
+def extract_remappable_topics_from_launch(launch_text: str) -> set[str]:
+    marker = "remappable_topics"
+    marker_idx = launch_text.find(marker)
+    if marker_idx < 0:
+        return set()
+
+    equal_idx = launch_text.find("=", marker_idx)
+    if equal_idx < 0:
+        return set()
+
+    bracket_idx = launch_text.find("[", equal_idx)
+    if bracket_idx < 0:
+        return set()
+
+    extracted = extract_matching_bracketed(launch_text, bracket_idx)
+    if extracted is None:
+        return set()
+
+    list_body, _ = extracted
+    topics: set[str] = set()
+    for _, declare_args in find_call_args(list_body, "DeclareLaunchArgument"):
+        default_match = RE_KEYWORD_DEFAULT_VALUE.search(declare_args)
+        if not default_match:
+            continue
+        topics.add(unquote_string_literal(default_match.group(1)))
+    return topics
+
+
+def find_node_source_files_for_executable(package_dir: Path, executable: str) -> list[Path]:
+    matches: list[Path] = []
+    for extension in (".cpp", ".cc", ".cxx", ".py"):
+        candidate = package_dir / "src" / f"{executable}{extension}"
+        if candidate.is_file():
+            matches.append(candidate)
+    return matches
+
+
 def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
     failing_calls: list[str] = []
     call_names = ("create_publisher", "create_subscription")
@@ -323,6 +401,84 @@ def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
         message=(
             "All checkable create_publisher/create_subscription string-literal topics "
             "use private namespace '~/...'"
+        ),
+        details=[],
+    )
+
+
+def check_demo_launch_remappable_topics_cover_node_pubsub(ctx: CheckContext) -> CheckResult:
+    package_dir = ctx.repo_root / "ros2_demo_package"
+    launch_dir = package_dir / "launch"
+
+    if not launch_dir.is_dir():
+        return CheckResult(
+            check_id="demo_launch_remappable_topics_cover_node_pubsub",
+            name="Demo launch remappable topics cover node pub/sub topics",
+            passed=True,
+            message="ros2_demo_package/launch not found; nothing to check",
+            details=[],
+        )
+
+    failures: list[str] = []
+    launch_files = sorted(launch_dir.glob("*.py"))
+    for launch_file in launch_files:
+        launch_text = read_text(launch_file)
+        remappable_topics = extract_remappable_topics_from_launch(launch_text)
+        executables = sorted(set(RE_LAUNCH_EXECUTABLE.findall(launch_text)))
+
+        for executable in executables:
+            source_files = find_node_source_files_for_executable(package_dir, executable)
+            if not source_files:
+                continue
+
+            declared_topics: set[str] = set()
+            for source_file in source_files:
+                text = read_text(source_file)
+                if source_file.suffix == ".py":
+                    if not (RE_PY_RCLPY_HINT.search(text) and RE_PY_NODE_CLASS.search(text)):
+                        continue
+                    declared_topics.update(collect_literal_pubsub_topics(text, cpp=False))
+                    continue
+
+                if has_cpp_node_evidence(text):
+                    declared_topics.update(collect_literal_pubsub_topics(text, cpp=True))
+
+            if not declared_topics:
+                continue
+
+            if not remappable_topics:
+                failures.append(
+                    f"{launch_file.relative_to(ctx.repo_root)} ({executable}): "
+                    "no remappable_topics defaults found"
+                )
+                continue
+
+            missing_topics = sorted(topic for topic in declared_topics if topic not in remappable_topics)
+            if missing_topics:
+                failures.append(
+                    f"{launch_file.relative_to(ctx.repo_root)} ({executable}): missing "
+                    + ", ".join(missing_topics)
+                )
+
+    if failures:
+        return CheckResult(
+            check_id="demo_launch_remappable_topics_cover_node_pubsub",
+            name="Demo launch remappable topics cover node pub/sub topics",
+            passed=False,
+            message=(
+                "Some ros2_demo_package node pub/sub topics are not listed in launch "
+                "remappable_topics"
+            ),
+            details=failures,
+        )
+
+    return CheckResult(
+        check_id="demo_launch_remappable_topics_cover_node_pubsub",
+        name="Demo launch remappable topics cover node pub/sub topics",
+        passed=True,
+        message=(
+            "All checkable ros2_demo_package node pub/sub topics are listed in launch "
+            "remappable_topics"
         ),
         details=[],
     )
@@ -696,6 +852,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "ros_pubsub_topics_private_namespace": (
         "ROS pub/sub topics use private namespace",
         check_ros_pubsub_topics_private_namespace,
+    ),
+    "demo_launch_remappable_topics_cover_node_pubsub": (
+        "Demo launch remappable topics cover node pub/sub topics",
+        check_demo_launch_remappable_topics_cover_node_pubsub,
     ),
     "required_top_level_symlinks": (
         "Required top-level symlinks",
