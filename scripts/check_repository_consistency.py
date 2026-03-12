@@ -165,12 +165,18 @@ def extract_matching_bracketed(text: str, open_bracket_idx: int) -> tuple[str, i
 
 
 def split_first_argument(call_args: str) -> str | None:
+    args = split_top_level_arguments(call_args)
+    return args[0] if args else None
+
+
+def split_top_level_arguments(call_args: str) -> list[str]:
     depth_paren = 0
     depth_bracket = 0
     depth_brace = 0
     depth_angle = 0
     i = 0
     start = 0
+    parts: list[str] = []
 
     while i < len(call_args):
         ch = call_args[i]
@@ -200,11 +206,16 @@ def split_first_argument(call_args: str) -> str | None:
             and depth_brace == 0
             and depth_angle == 0
         ):
-            return call_args[start:i].strip()
+            part = call_args[start:i].strip()
+            if part:
+                parts.append(part)
+            start = i + 1
         i += 1
 
-    arg = call_args[start:].strip()
-    return arg if arg else None
+    tail = call_args[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
 
 
 def find_call_args(text: str, function_name: str) -> list[tuple[int, str]]:
@@ -281,16 +292,16 @@ def unquote_string_literal(literal: str) -> str:
     return stripped[quote_idx + 1 : end_idx]
 
 
-def collect_literal_pubsub_topics(text: str, *, cpp: bool) -> set[str]:
-    call_names = ("create_publisher", "create_subscription")
+def collect_literal_comm_names(text: str, call_specs: dict[str, int], *, cpp: bool) -> set[str]:
     literal_matcher = RE_CPP_STRING_LITERAL if cpp else RE_PY_STRING_LITERAL
     topics: set[str] = set()
 
-    for call_name in call_names:
+    for call_name, arg_index in call_specs.items():
         for _, args_text in find_call_args(text, call_name):
-            topic_arg = split_first_argument(args_text)
-            if topic_arg is None:
+            args = split_top_level_arguments(args_text)
+            if len(args) <= arg_index:
                 continue
+            topic_arg = args[arg_index]
             if not literal_matcher.fullmatch(topic_arg):
                 continue
             topics.add(unquote_string_literal(topic_arg))
@@ -336,7 +347,18 @@ def find_node_source_files_for_executable(package_dir: Path, executable: str) ->
 
 def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
     failing_calls: list[str] = []
-    call_names = ("create_publisher", "create_subscription")
+    cpp_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 0,
+        "create_client": 0,
+    }
+    py_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 1,
+        "create_client": 1,
+    }
 
     for pkg_dir in discover_ros_package_dirs(ctx.repo_root):
         cpp_files = sorted([p for p in pkg_dir.rglob("*") if p.suffix in CPP_EXTENSIONS and p.is_file()])
@@ -347,11 +369,12 @@ def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
             if not has_cpp_node_evidence(text):
                 continue
 
-            for call_name in call_names:
+            for call_name, arg_index in cpp_call_specs.items():
                 for call_idx, args_text in find_call_args(text, call_name):
-                    topic_arg = split_first_argument(args_text)
-                    if topic_arg is None:
+                    args = split_top_level_arguments(args_text)
+                    if len(args) <= arg_index:
                         continue
+                    topic_arg = args[arg_index]
                     if not RE_CPP_STRING_LITERAL.fullmatch(topic_arg):
                         continue
 
@@ -367,11 +390,12 @@ def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
             if not RE_PY_RCLPY_HINT.search(text) or not RE_PY_NODE_CLASS.search(text):
                 continue
 
-            for call_name in call_names:
+            for call_name, arg_index in py_call_specs.items():
                 for call_idx, args_text in find_call_args(text, call_name):
-                    topic_arg = split_first_argument(args_text)
-                    if topic_arg is None:
+                    args = split_top_level_arguments(args_text)
+                    if len(args) <= arg_index:
                         continue
+                    topic_arg = args[arg_index]
                     if not RE_PY_STRING_LITERAL.fullmatch(topic_arg):
                         continue
 
@@ -388,7 +412,8 @@ def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
             name="ROS pub/sub topics use private namespace",
             passed=False,
             message=(
-                "Some create_publisher/create_subscription calls use string-literal topics "
+                "Some create_publisher/create_subscription/create_service/create_client calls use "
+                "string-literal names "
                 "outside private namespace '~/...'"
             ),
             details=sorted(failing_calls),
@@ -399,7 +424,8 @@ def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
         name="ROS pub/sub topics use private namespace",
         passed=True,
         message=(
-            "All checkable create_publisher/create_subscription string-literal topics "
+            "All checkable create_publisher/create_subscription/create_service/create_client "
+            "string-literal names "
             "use private namespace '~/...'"
         ),
         details=[],
@@ -420,6 +446,18 @@ def check_demo_launch_remappable_topics_cover_node_pubsub(ctx: CheckContext) -> 
         )
 
     failures: list[str] = []
+    cpp_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 0,
+        "create_client": 0,
+    }
+    py_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 1,
+        "create_client": 1,
+    }
     launch_files = sorted(launch_dir.glob("*.py"))
     for launch_file in launch_files:
         launch_text = read_text(launch_file)
@@ -437,11 +475,11 @@ def check_demo_launch_remappable_topics_cover_node_pubsub(ctx: CheckContext) -> 
                 if source_file.suffix == ".py":
                     if not (RE_PY_RCLPY_HINT.search(text) and RE_PY_NODE_CLASS.search(text)):
                         continue
-                    declared_topics.update(collect_literal_pubsub_topics(text, cpp=False))
+                    declared_topics.update(collect_literal_comm_names(text, py_call_specs, cpp=False))
                     continue
 
                 if has_cpp_node_evidence(text):
-                    declared_topics.update(collect_literal_pubsub_topics(text, cpp=True))
+                    declared_topics.update(collect_literal_comm_names(text, cpp_call_specs, cpp=True))
 
             if not declared_topics:
                 continue
@@ -466,7 +504,7 @@ def check_demo_launch_remappable_topics_cover_node_pubsub(ctx: CheckContext) -> 
             name="Demo launch remappable topics cover node pub/sub topics",
             passed=False,
             message=(
-                "Some ros2_demo_package node pub/sub topics are not listed in launch "
+                "Some ros2_demo_package node pub/sub/service names are not listed in launch "
                 "remappable_topics"
             ),
             details=failures,
@@ -477,7 +515,7 @@ def check_demo_launch_remappable_topics_cover_node_pubsub(ctx: CheckContext) -> 
         name="Demo launch remappable topics cover node pub/sub topics",
         passed=True,
         message=(
-            "All checkable ros2_demo_package node pub/sub topics are listed in launch "
+            "All checkable ros2_demo_package node pub/sub/service names are listed in launch "
             "remappable_topics"
         ),
         details=[],
