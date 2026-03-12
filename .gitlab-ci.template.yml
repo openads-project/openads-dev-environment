@@ -15,9 +15,10 @@ docker-ros:
     BASE_IMAGE: rwthika/ros2:jazzy
     RMW_IMPLEMENTATION: rmw_zenoh_cpp
     COMMAND: ros2 launch my_package my_launch_file.launch.py
-    ENABLE_INDUSTRIAL_CI: 'true'
-    ENABLE_SLIM: 'false'
     ENABLE_RECURSIVE_VCS_IMPORT: 'false'
+    ENABLE_SLIM: 'false'
+    ENABLE_INDUSTRIAL_CI: 'true'
+    TARGET_CMAKE_ARGS: '-DCMAKE_EXPORT_COMPILE_COMMANDS=1'
 
 consistency:
   stage: consistency
