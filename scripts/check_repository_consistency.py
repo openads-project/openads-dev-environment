@@ -45,6 +45,8 @@ RE_CPP_DECLARE_AND_LOAD = re.compile(r"\bdeclareAndLoadParameter\b")
 RE_PY_NODE_CLASS = re.compile(r"class\s+\w+\s*\(([^)]*\bNode\b[^)]*)\)\s*:")
 RE_PY_RCLPY_HINT = re.compile(r"\brclpy\b")
 RE_PY_DECLARE_AND_LOAD = re.compile(r"def\s+declare_and_load_parameter\s*\(")
+RE_CPP_STRING_LITERAL = re.compile(r'^(?:u8|u|U|L)?"(?:\\.|[^"\\])*"$')
+RE_PY_STRING_LITERAL = re.compile(r"^[rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\")$")
 
 ANSI_RESET = "\033[0m"
 ANSI_GREEN = "\033[32m"
@@ -97,6 +99,233 @@ def read_text(path: Path) -> str:
 
 def has_cpp_node_evidence(text: str) -> bool:
     return bool(RE_CPP_NODE_PUBLIC.search(text) or RE_CPP_NODE_BASE_INIT.search(text))
+
+
+def is_identifier_char(ch: str) -> bool:
+    return ch.isalnum() or ch == "_"
+
+
+def skip_string_literal(text: str, pos: int) -> int:
+    quote = text[pos]
+    i = pos + 1
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text[i] == quote:
+            return i + 1
+        i += 1
+    return len(text)
+
+
+def extract_matching_parenthesized(text: str, open_paren_idx: int) -> tuple[str, int] | None:
+    if open_paren_idx >= len(text) or text[open_paren_idx] != "(":
+        return None
+
+    depth = 1
+    i = open_paren_idx + 1
+    while i < len(text):
+        ch = text[i]
+        if ch in ("'", '"'):
+            i = skip_string_literal(text, i)
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_paren_idx + 1 : i], i + 1
+        i += 1
+    return None
+
+
+def split_first_argument(call_args: str) -> str | None:
+    depth_paren = 0
+    depth_bracket = 0
+    depth_brace = 0
+    depth_angle = 0
+    i = 0
+    start = 0
+
+    while i < len(call_args):
+        ch = call_args[i]
+        if ch in ("'", '"'):
+            i = skip_string_literal(call_args, i)
+            continue
+        if ch == "(":
+            depth_paren += 1
+        elif ch == ")":
+            depth_paren = max(0, depth_paren - 1)
+        elif ch == "[":
+            depth_bracket += 1
+        elif ch == "]":
+            depth_bracket = max(0, depth_bracket - 1)
+        elif ch == "{":
+            depth_brace += 1
+        elif ch == "}":
+            depth_brace = max(0, depth_brace - 1)
+        elif ch == "<":
+            depth_angle += 1
+        elif ch == ">":
+            depth_angle = max(0, depth_angle - 1)
+        elif (
+            ch == ","
+            and depth_paren == 0
+            and depth_bracket == 0
+            and depth_brace == 0
+            and depth_angle == 0
+        ):
+            return call_args[start:i].strip()
+        i += 1
+
+    arg = call_args[start:].strip()
+    return arg if arg else None
+
+
+def find_call_args(text: str, function_name: str) -> list[tuple[int, str]]:
+    results: list[tuple[int, str]] = []
+    search_from = 0
+    name_len = len(function_name)
+
+    while True:
+        idx = text.find(function_name, search_from)
+        if idx < 0:
+            break
+        search_from = idx + name_len
+
+        before = text[idx - 1] if idx > 0 else ""
+        after = text[idx + name_len] if idx + name_len < len(text) else ""
+        if (before and is_identifier_char(before)) or (after and is_identifier_char(after)):
+            continue
+
+        j = idx + name_len
+        while j < len(text) and text[j].isspace():
+            j += 1
+
+        # Skip template arguments: create_subscription<MsgT>(...)
+        if j < len(text) and text[j] == "<":
+            depth = 1
+            j += 1
+            while j < len(text) and depth > 0:
+                ch = text[j]
+                if ch in ("'", '"'):
+                    j = skip_string_literal(text, j)
+                    continue
+                if ch == "<":
+                    depth += 1
+                elif ch == ">":
+                    depth -= 1
+                j += 1
+            while j < len(text) and text[j].isspace():
+                j += 1
+
+        if j >= len(text) or text[j] != "(":
+            continue
+
+        extracted = extract_matching_parenthesized(text, j)
+        if extracted is None:
+            continue
+        args_text, _ = extracted
+        results.append((idx, args_text))
+
+    return results
+
+
+def unquote_string_literal(literal: str) -> str:
+    stripped = literal.strip()
+    quote_idx_single = stripped.find("'")
+    quote_idx_double = stripped.find('"')
+    quote_idx = -1
+    quote_char = ""
+
+    if quote_idx_single == -1:
+        quote_idx = quote_idx_double
+        quote_char = '"'
+    elif quote_idx_double == -1:
+        quote_idx = quote_idx_single
+        quote_char = "'"
+    else:
+        quote_idx = min(quote_idx_single, quote_idx_double)
+        quote_char = stripped[quote_idx]
+
+    if quote_idx < 0:
+        return stripped
+    end_idx = stripped.rfind(quote_char)
+    if end_idx <= quote_idx:
+        return stripped
+    return stripped[quote_idx + 1 : end_idx]
+
+
+def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
+    failing_calls: list[str] = []
+    call_names = ("create_publisher", "create_subscription")
+
+    for pkg_dir in discover_ros_package_dirs(ctx.repo_root):
+        cpp_files = sorted([p for p in pkg_dir.rglob("*") if p.suffix in CPP_EXTENSIONS and p.is_file()])
+        py_files = sorted([p for p in pkg_dir.rglob("*") if p.suffix == PYTHON_EXTENSION and p.is_file()])
+
+        for path in cpp_files:
+            text = read_text(path)
+            if not has_cpp_node_evidence(text):
+                continue
+
+            for call_name in call_names:
+                for call_idx, args_text in find_call_args(text, call_name):
+                    topic_arg = split_first_argument(args_text)
+                    if topic_arg is None:
+                        continue
+                    if not RE_CPP_STRING_LITERAL.fullmatch(topic_arg):
+                        continue
+
+                    topic_name = unquote_string_literal(topic_arg)
+                    if not topic_name.startswith("~/"):
+                        line = text.count("\n", 0, call_idx) + 1
+                        failing_calls.append(
+                            f"{path.relative_to(ctx.repo_root)}:{line} {call_name} topic '{topic_name}'"
+                        )
+
+        for path in py_files:
+            text = read_text(path)
+            if not RE_PY_RCLPY_HINT.search(text) or not RE_PY_NODE_CLASS.search(text):
+                continue
+
+            for call_name in call_names:
+                for call_idx, args_text in find_call_args(text, call_name):
+                    topic_arg = split_first_argument(args_text)
+                    if topic_arg is None:
+                        continue
+                    if not RE_PY_STRING_LITERAL.fullmatch(topic_arg):
+                        continue
+
+                    topic_name = unquote_string_literal(topic_arg)
+                    if not topic_name.startswith("~/"):
+                        line = text.count("\n", 0, call_idx) + 1
+                        failing_calls.append(
+                            f"{path.relative_to(ctx.repo_root)}:{line} {call_name} topic '{topic_name}'"
+                        )
+
+    if failing_calls:
+        return CheckResult(
+            check_id="ros_pubsub_topics_private_namespace",
+            name="ROS pub/sub topics use private namespace",
+            passed=False,
+            message=(
+                "Some create_publisher/create_subscription calls use string-literal topics "
+                "outside private namespace '~/...'"
+            ),
+            details=sorted(failing_calls),
+        )
+
+    return CheckResult(
+        check_id="ros_pubsub_topics_private_namespace",
+        name="ROS pub/sub topics use private namespace",
+        passed=True,
+        message=(
+            "All checkable create_publisher/create_subscription string-literal topics "
+            "use private namespace '~/...'"
+        ),
+        details=[],
+    )
 
 
 def check_no_top_level_package_xml(ctx: CheckContext) -> CheckResult:
@@ -463,6 +692,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "ros_nodes_have_parameter_loader": (
         "ROS nodes define parameter loader helper",
         check_ros_nodes_have_parameter_loader,
+    ),
+    "ros_pubsub_topics_private_namespace": (
+        "ROS pub/sub topics use private namespace",
+        check_ros_pubsub_topics_private_namespace,
     ),
     "required_top_level_symlinks": (
         "Required top-level symlinks",
