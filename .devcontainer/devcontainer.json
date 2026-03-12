@@ -51,23 +51,15 @@
       },
       "extensions": [
         "althack.ament-task-provider",
-        "anthropic.claude-code",
         "cschlosser.doxdocgen",
-        "github.copilot-chat",
-        "github.copilot",
-        "google.geminicodeassist",
         "mhutchie.git-graph",
-        "ms-azuretools.vscode-containers",
         "ms-python.black-formatter",
         "ms-python.flake8",
         "ms-python.python",
-        "ms-python.vscode-pylance",
-        "ms-vscode-remote.vscode-remote-extensionpack",
         "ms-vscode.cpp-devtools",
         "ms-vscode.cpptools-themes",
         "ms-vscode.cpptools",
         "njpwerner.autodocstring",
-        "openai.chatgpt",
         "Ranch-Hand-Robotics.rde-pack"
       ]
     }
