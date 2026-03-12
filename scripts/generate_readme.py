@@ -113,6 +113,7 @@ class TopLevelTemplateContext:
     container_image: str
     badges_block: str
     intro_block: str
+    pre_quickstart_block: str
     quickstart_package: str
     quickstart_launch_file: str
     documentation_lines: list[str]
@@ -532,6 +533,8 @@ INTRO_PLACEHOLDER = (
     'TODO: High-level repository introduction paragraph'
 )
 
+PRE_QUICKSTART_PLACEHOLDER = '<!-- <img src="TODO: teaser image/gif" width=800> -->'
+
 ACK_PLACEHOLDER = 'TODO: Project/funding acknowledgements'
 
 
@@ -613,10 +616,29 @@ def parse_repo_remote(remote: str) -> RepoMetadata:
 
 def extract_intro_block(readme_text: str) -> str:
     """Return repo-specific intro block (headline + paragraph) or placeholder."""
-    m = re.search(r'</p>\n\n(.*?)\n\n> \[!IMPORTANT\]', readme_text, re.DOTALL)
+    m = re.search(
+        r'</p>\n\n(.*?)\n\n\*\*🚀 \[Quick Start\]\(#-quick-start\)\*\*'
+        r' \| \*\*🧑‍💻 \[Development\]\(#-development\)\*\*'
+        r' \| \*\*📝 \[Documentation\]\(#-documentation\)\*\*'
+        r' \| \*\*🙏 \[Acknowledgements\]\(#-acknowledgements\)\*\*',
+        readme_text,
+        re.DOTALL,
+    )
     if m and m.group(1).strip():
         return m.group(1).strip()
     return INTRO_PLACEHOLDER
+
+
+def extract_pre_quickstart_block(readme_text: str) -> str:
+    """Return custom content between IMPORTANT block and Quick Start, or placeholder."""
+    m = re.search(
+        r'> \[!IMPORTANT\]\s*\n(?:>.*\n)+\n(.*?)\n\n## 🚀 Quick Start',
+        readme_text,
+        re.DOTALL,
+    )
+    if m is not None:
+        return m.group(1).strip()
+    return PRE_QUICKSTART_PLACEHOLDER
 
 
 def extract_acknowledgements_body(readme_text: str) -> str:
@@ -690,6 +712,7 @@ def render_top_level_readme(
     remote = get_origin_remote(repo_root)
     meta = parse_repo_remote(remote)
     intro_block = extract_intro_block(existing_readme)
+    pre_quickstart_block = extract_pre_quickstart_block(existing_readme)
     ack_body = extract_acknowledgements_body(existing_readme)
     quickstart_pkg, quickstart_launch_file = pick_quickstart_target(packages)
     package_doc_entries = build_package_doc_entries(repo_root, packages)
@@ -702,6 +725,7 @@ def render_top_level_readme(
         container_image=meta.container_image,
         badges_block=render_badges(meta),
         intro_block=intro_block,
+        pre_quickstart_block=pre_quickstart_block,
         quickstart_package=quickstart_pkg,
         quickstart_launch_file=quickstart_launch_file,
         documentation_lines=documentation_lines,
