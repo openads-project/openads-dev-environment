@@ -47,6 +47,7 @@ RE_PY_RCLPY_HINT = re.compile(r"\brclpy\b")
 RE_PY_DECLARE_AND_LOAD = re.compile(r"def\s+declare_and_load_parameter\s*\(")
 RE_CPP_STRING_LITERAL = re.compile(r'^(?:u8|u|U|L)?"(?:\\.|[^"\\])*"$')
 RE_PY_STRING_LITERAL = re.compile(r"^[rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\")$")
+RE_CMAKE_TARGET_DECL = re.compile(r"^\s*add_(?:executable|library)\s*\(", re.MULTILINE)
 RE_KEYWORD_DEFAULT_VALUE = re.compile(
     r"default_value\s*=\s*([rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"))"
 )
@@ -56,6 +57,12 @@ ANSI_RESET = "\033[0m"
 ANSI_GREEN = "\033[32m"
 ANSI_RED = "\033[31m"
 ANSI_YELLOW = "\033[33m"
+
+EXPECTED_CMAKE_LINT_LINES = """find_package(ament_lint_auto REQUIRED)
+  set(ament_cmake_clang_format_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../.vscode/format/.clang-format)
+  set(ament_cmake_clang_tidy_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../.vscode/lint/.clang-tidy)
+  set(ament_cmake_flake8_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../.vscode/lint/ament_flake8.ini)
+  ament_lint_auto_find_test_dependencies()"""
 
 
 def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -598,6 +605,45 @@ def check_ros_nodes_have_parameter_loader(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_ros_cmake_has_required_lint_block(ctx: CheckContext) -> CheckResult:
+    offenders: list[str] = []
+
+    for pkg_dir in discover_ros_package_dirs(ctx.repo_root):
+        cmake_lists = pkg_dir / "CMakeLists.txt"
+        if not cmake_lists.is_file():
+            continue
+
+        cmake_text = read_text(cmake_lists).replace("\r\n", "\n")
+        if not RE_CMAKE_TARGET_DECL.search(cmake_text):
+            continue
+
+        if EXPECTED_CMAKE_LINT_LINES not in cmake_text:
+            offenders.append(str(cmake_lists.relative_to(ctx.repo_root)))
+
+    if offenders:
+        return CheckResult(
+            check_id="ros_cmake_has_required_lint_block",
+            name="ROS CMake packages with targets include required lint block",
+            passed=False,
+            message=(
+                "Some ROS CMake packages with add_executable/add_library targets "
+                "do not contain the exact required lint lines"
+            ),
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="ros_cmake_has_required_lint_block",
+        name="ROS CMake packages with targets include required lint block",
+        passed=True,
+            message=(
+                "All ROS CMake packages with add_executable/add_library targets "
+                "contain the exact required lint lines"
+            ),
+        details=[],
+    )
+
+
 def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
     expected_links = {
         ".devcontainer": ".openads-dev-environment/.devcontainer/",
@@ -886,6 +932,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "ros_nodes_have_parameter_loader": (
         "ROS nodes define parameter loader helper",
         check_ros_nodes_have_parameter_loader,
+    ),
+    "ros_cmake_has_required_lint_block": (
+        "ROS CMake packages with targets include required lint block",
+        check_ros_cmake_has_required_lint_block,
     ),
     "ros_pubsub_topics_private_namespace": (
         "ROS pub/sub topics use private namespace",
