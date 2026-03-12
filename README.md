@@ -26,7 +26,8 @@ This repository defines a common development environment for components of [🚗
     mkdir -p .github/workflows
     cp .openads-dev-environment/.github/workflow_calls/*.yml .github/workflows/
     ```
-4. Install the recommended VS Code extensions.  
+4. Customize the copied `docker-ros.yml` workflow to fit your repository, in particular the `platform`, `base-image` and `command`.
+5. Install the recommended VS Code extensions.  
     > *Ctrl+Shift+P / Extensions: Show Recommended Extensions / Install Workspace Recommended Extensions (Cloud Download Icon)*
 
 ## Usage
