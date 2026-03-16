@@ -37,6 +37,7 @@ CheckFn = Callable[[CheckContext], CheckResult]
 
 CPP_EXTENSIONS = (".hpp", ".h", ".cpp", ".cc", ".cxx")
 PYTHON_EXTENSION = ".py"
+COPYRIGHT_HEADER_EXTENSIONS = (".hpp", ".cpp", ".py")
 
 RE_CPP_NODE_PUBLIC = re.compile(r"public\s+rclcpp::Node")
 RE_CPP_NODE_BASE_INIT = re.compile(r":\s*Node\s*\(")
@@ -48,6 +49,10 @@ RE_PY_DECLARE_AND_LOAD = re.compile(r"def\s+declare_and_load_parameter\s*\(")
 RE_CPP_STRING_LITERAL = re.compile(r'^(?:u8|u|U|L)?"(?:\\.|[^"\\])*"$')
 RE_PY_STRING_LITERAL = re.compile(r"^[rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\")$")
 RE_CMAKE_TARGET_DECL = re.compile(r"^\s*add_(?:executable|library)\s*\(", re.MULTILINE)
+RE_COPYRIGHT_HEADER = re.compile(
+    r"Copyright\s+Institute\s+for\s+Automotive\s+Engineering\s+\(ika\),\s+RWTH\s+Aachen\s+University"
+)
+RE_APACHE_SPDX_IDENTIFIER = re.compile(r"SPDX-License-Identifier:\s*Apache-2\.0")
 RE_KEYWORD_DEFAULT_VALUE = re.compile(
     r"default_value\s*=\s*([rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"))"
 )
@@ -93,6 +98,19 @@ def git_status_porcelain(repo_root: Path) -> list[str]:
         raise RuntimeError(status.stderr.strip() or "git status failed")
     lines = [line for line in status.stdout.splitlines() if line.strip()]
     return sorted(lines)
+
+
+def git_tracked_files(repo_root: Path) -> list[Path]:
+    tracked = run_git(["ls-files"], cwd=repo_root)
+    if tracked.returncode != 0:
+        raise RuntimeError(tracked.stderr.strip() or "git ls-files failed")
+
+    files: list[Path] = []
+    for line in tracked.stdout.splitlines():
+        if not line.strip():
+            continue
+        files.append(repo_root / line.strip())
+    return files
 
 
 def discover_ros_package_dirs(repo_root: Path) -> list[Path]:
@@ -585,6 +603,53 @@ def check_top_level_license_apache2(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_source_files_have_copyright_notice(ctx: CheckContext) -> CheckResult:
+    try:
+        tracked_files = git_tracked_files(ctx.repo_root)
+    except RuntimeError as err:
+        return CheckResult(
+            check_id="source_files_have_copyright_notice",
+            name="Tracked .cpp/.hpp/.py files include copyright notice",
+            passed=False,
+            message="Failed to list tracked files from git",
+            details=[str(err)],
+        )
+
+    offenders: list[str] = []
+    for path in tracked_files:
+        if path.suffix not in COPYRIGHT_HEADER_EXTENSIONS:
+            continue
+        if not path.is_file():
+            continue
+
+        text = read_text(path)
+        header_window = "\n".join(text.splitlines()[:6])
+        if not RE_COPYRIGHT_HEADER.search(header_window) or not RE_APACHE_SPDX_IDENTIFIER.search(
+            header_window
+        ):
+            offenders.append(str(path.relative_to(ctx.repo_root)))
+
+    if offenders:
+        return CheckResult(
+            check_id="source_files_have_copyright_notice",
+            name="Tracked .cpp/.hpp/.py files include copyright notice",
+            passed=False,
+            message=(
+                "Some tracked .cpp/.hpp/.py files are missing the required copyright "
+                "notice and/or Apache SPDX identifier near the top of the file"
+            ),
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="source_files_have_copyright_notice",
+        name="Tracked .cpp/.hpp/.py files include copyright notice",
+        passed=True,
+        message="All tracked .cpp/.hpp/.py files include the required copyright notice",
+        details=[],
+    )
+
+
 def check_ros_nodes_have_parameter_loader(ctx: CheckContext) -> CheckResult:
     offending: list[str] = []
 
@@ -968,6 +1033,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "top_level_license_apache2": (
         'Top-level "LICENSE" with Apache 2.0',
         check_top_level_license_apache2,
+    ),
+    "source_files_have_copyright_notice": (
+        "Tracked .cpp/.hpp/.py files include copyright notice",
+        check_source_files_have_copyright_notice,
     ),
     "ros_nodes_have_parameter_loader": (
         "ROS nodes define parameter loader helper",
