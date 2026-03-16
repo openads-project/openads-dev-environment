@@ -661,7 +661,6 @@ def render_badges(meta: RepoMetadata) -> str:
             f'  <a href="{meta.repo_https_url}/blob/main/LICENSE"><img src="https://img.shields.io/github/license/{meta.owner}/{meta.repo}"/></a>',
             '  <br>',
             f'  <a href="{meta.repo_https_url}/actions/workflows/docker-ros.yml"><img src="{meta.repo_https_url}/actions/workflows/docker-ros.yml/badge.svg"/></a>',
-            f'  <a href="{meta.repo_https_url}/actions/workflows/industrial_ci.yml"><img src="{meta.repo_https_url}/actions/workflows/industrial_ci.yml/badge.svg"/></a>',
             f'  <a href="{meta.pages_url}"><img src="{meta.repo_https_url}/actions/workflows/docs.yml/badge.svg"/></a>',
             f'  <a href="{meta.repo_https_url}/actions/workflows/consistency.yml"><img src="{meta.repo_https_url}/actions/workflows/consistency.yml/badge.svg"/></a>',
         ])

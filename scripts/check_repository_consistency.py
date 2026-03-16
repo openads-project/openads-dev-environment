@@ -793,7 +793,6 @@ def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
     required_workflows = (
         "docker-ros.yml",
         "docs.yml",
-        "industrial_ci.yml",
         "consistency.yml",
     )
     workflows_dir = ctx.repo_root / ".github" / "workflows"
@@ -825,7 +824,6 @@ def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
 def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
     workflow_files = (
         "docs.yml",
-        "industrial_ci.yml",
         "consistency.yml",
     )
     root_workflows_dir = ctx.repo_root / ".github" / "workflows"
