@@ -20,7 +20,6 @@ jobs:
           base-image: rwthika/ros2:jazzy
           rmw-implementation: rmw_zenoh_cpp
           command: ros2 launch my_package my_launch_file.launch.py
-          enable-recursive-vcs-import: false
           enable-slim: false
           enable-industrial-ci: true
         env:
