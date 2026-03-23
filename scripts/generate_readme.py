@@ -124,6 +124,13 @@ class TopLevelTemplateContext:
 # Type helpers
 # ---------------------------------------------------------------------------
 
+MANUAL_TABLE_HEADERS = {
+    '| Topic | Type | Description |': 'topic',
+    '| Action | Type | Description |': 'action',
+    '| Service | Type | Description |': 'service',
+    '| Type | Description |': 'interface',
+}
+
 def cpp_ros_type(cpp_type: str, type_aliases: dict) -> str:
     """Resolve type aliases and convert C++ ROS type to ROS notation (:: -> /)."""
     t = cpp_type.strip()
@@ -305,7 +312,12 @@ def extract_python_launch_arguments(source: str) -> list:
         else:
             dv_expr = re.search(
                 r'default_value\s*=\s*(.+?)(?=,\s*\w+\s*=|\s*$)', call_body, re.DOTALL)
-            default = dv_expr.group(1).strip() if dv_expr else ''
+            if dv_expr:
+                default = ' '.join(dv_expr.group(1).split())
+                default = re.sub(r'\(\s+', '(', default)
+                default = re.sub(r'\s+\)', ')', default)
+            else:
+                default = ''
 
         desc_m = re.search(r'description\s*=\s*"([^"]*)"', call_body)
         description = desc_m.group(1) if desc_m else ''
@@ -382,21 +394,124 @@ def resolve_parameters(raw_params: list, member_var_map: dict) -> list:
 # Markdown rendering
 # ---------------------------------------------------------------------------
 
-def md_topic_table(interfaces: list) -> str:
+def normalize_table_cell(cell: str) -> str:
+    """Normalize Markdown table cell content for stable matching."""
+    return ' '.join(cell.strip().split())
+
+
+def sanitize_manual_content(content: str) -> str:
+    """Normalize preserved description content from existing README tables."""
+    return content.strip()
+
+
+def manual_key(heading_path: tuple[str, ...], table_kind: str, row_cells: list[str]) -> tuple:
+    return (
+        tuple(heading_path),
+        table_kind,
+        tuple(normalize_table_cell(cell) for cell in row_cells),
+    )
+
+
+def fallback_manual_key(table_kind: str, row_cells: list[str]) -> tuple:
+    return (
+        table_kind,
+        tuple(normalize_table_cell(cell) for cell in row_cells),
+    )
+
+
+def split_table_row(line: str) -> list[str]:
+    """Split a simple Markdown table row into normalized cell values."""
+    return [normalize_table_cell(cell) for cell in line.split('|')[1:-1]]
+
+
+def extract_manual_descriptions(readme_text: str) -> dict[tuple, str]:
+    """Extract manually maintained description cells from existing README tables."""
+    result = {}
+    heading_path: list[str] = []
+    current_table_kind = None
+
+    for line in readme_text.splitlines():
+        heading_match = re.match(r'^(#{1,6})\s+(.*)$', line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            title = heading_match.group(2).strip()
+            heading_path = heading_path[:level - 1]
+            heading_path.append(title)
+            current_table_kind = None
+            continue
+
+        stripped = line.strip()
+        if stripped in MANUAL_TABLE_HEADERS:
+            current_table_kind = MANUAL_TABLE_HEADERS[stripped]
+            continue
+        if current_table_kind and stripped.startswith('| ---'):
+            continue
+        if current_table_kind and stripped.startswith('|'):
+            cells = split_table_row(line)
+            if len(cells) >= 2:
+                description = sanitize_manual_content(cells[-1])
+                key_cells = cells[:-1]
+                result[manual_key(tuple(heading_path), current_table_kind, key_cells)] = description
+                if description:
+                    result.setdefault(fallback_manual_key(current_table_kind, key_cells), description)
+            continue
+        if stripped:
+            current_table_kind = None
+
+    return result
+
+
+def render_manual_cell(
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+    table_kind: str,
+    row_cells: list[str],
+) -> str:
+    exact = manual_descriptions.get(manual_key(heading_path, table_kind, row_cells), '')
+    if exact:
+        return exact
+    return manual_descriptions.get(fallback_manual_key(table_kind, row_cells), '')
+
+
+def md_topic_table(
+    interfaces: list,
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+) -> str:
     rows = ['| Topic | Type | Description |', '| --- | --- | --- |']
-    rows += [f'| `{i.name}` | `{i.msg_type}` | |' for i in interfaces]
+    rows += [
+        f'| `{i.name}` | `{i.msg_type}` | '
+        f'{render_manual_cell(manual_descriptions, heading_path, "topic", [f"`{i.name}`", f"`{i.msg_type}`"])} |'
+        for i in interfaces
+    ]
     return '\n'.join(rows)
 
 
-def md_action_table(interfaces: list) -> str:
+def md_action_table(
+    interfaces: list,
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+) -> str:
     rows = ['| Action | Type | Description |', '| --- | --- | --- |']
-    rows += [f'| `{i.name}` | `{i.action_type}` | |' for i in interfaces]
+    rows += [
+        f'| `{i.name}` | `{i.action_type}` | '
+        f'{render_manual_cell(manual_descriptions, heading_path, "action", [f"`{i.name}`", f"`{i.action_type}`"])} |'
+        for i in interfaces
+    ]
     return '\n'.join(rows)
 
 
-def md_service_table(interfaces: list) -> str:
+def md_service_table(
+    interfaces: list,
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+) -> str:
     rows = ['| Service | Type | Description |', '| --- | --- | --- |']
-    rows += [f'| `{i.name}` | `{i.srv_type}` | |' for i in interfaces]
+    rows += [
+        f'| `{i.name}` | `{i.srv_type}` | '
+        f'{render_manual_cell(manual_descriptions, heading_path, "service", [f"`{i.name}`", f"`{i.srv_type}`"])} |'
+        for i in interfaces
+    ]
     return '\n'.join(rows)
 
 
@@ -406,9 +521,17 @@ def md_launch_args_table(args: list) -> str:
     return '\n'.join(rows)
 
 
-def md_interface_table(entries: list) -> str:
+def md_interface_table(
+    entries: list,
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+) -> str:
     rows = ['| Type | Description |', '| --- | --- |']
-    rows += [f'| [`{full_type}`]({rel_path}) | |' for full_type, rel_path in entries]
+    rows += [
+        f'| [`{full_type}`]({rel_path}) | '
+        f'{render_manual_cell(manual_descriptions, heading_path, "interface", [f"[`{full_type}`]({rel_path})"])} |'
+        for full_type, rel_path in entries
+    ]
     return '\n'.join(rows)
 
 
@@ -450,24 +573,58 @@ def render_node_diagram(node: NodeInterfaces) -> str:
     return '\n'.join(lines)
 
 
-def render_node(node: NodeInterfaces) -> str:
+def render_node(node: NodeInterfaces, manual_descriptions: dict[tuple, str]) -> str:
     parts = [f'### `{node.node_name}`']
     if node.subscribers or node.publishers or node.service_servers or node.action_servers:
         parts += ['', render_node_diagram(node)]
     if node.subscribers:
-        parts += ['\n#### Subscribed Topics\n', md_topic_table(node.subscribers)]
+        parts += [
+            '\n#### Subscribed Topics\n',
+            md_topic_table(
+                node.subscribers,
+                manual_descriptions,
+                ('Nodes', f'`{node.node_name}`', 'Subscribed Topics'),
+            ),
+        ]
     if node.publishers:
-        parts += ['\n#### Published Topics\n', md_topic_table(node.publishers)]
+        parts += [
+            '\n#### Published Topics\n',
+            md_topic_table(
+                node.publishers,
+                manual_descriptions,
+                ('Nodes', f'`{node.node_name}`', 'Published Topics'),
+            ),
+        ]
     if node.service_servers:
-        parts += ['\n#### Service Servers\n', md_service_table(node.service_servers)]
+        parts += [
+            '\n#### Service Servers\n',
+            md_service_table(
+                node.service_servers,
+                manual_descriptions,
+                ('Nodes', f'`{node.node_name}`', 'Service Servers'),
+            ),
+        ]
     if node.action_servers:
-        parts += ['\n#### Action Servers\n', md_action_table(node.action_servers)]
+        parts += [
+            '\n#### Action Servers\n',
+            md_action_table(
+                node.action_servers,
+                manual_descriptions,
+                ('Nodes', f'`{node.node_name}`', 'Action Servers'),
+            ),
+        ]
     if node.action_clients:
-        parts += ['\n#### Action Clients\n', md_action_table(node.action_clients)]
+        parts += [
+            '\n#### Action Clients\n',
+            md_action_table(
+                node.action_clients,
+                manual_descriptions,
+                ('Nodes', f'`{node.node_name}`', 'Action Clients'),
+            ),
+        ]
     if node.parameters:
         parts += ['\n#### Parameters\n', md_parameter_table(node.parameters)]
     return '\n'.join(parts)
-
 
 def print_diff(old: str, new: str, path: Path) -> None:
     """Print a colored unified diff of old vs new to stderr."""
@@ -743,7 +900,7 @@ def render_top_level_readme(
 # ---------------------------------------------------------------------------
 
 def main():
-    repo_root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent.parent
+    repo_root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[2]
     try:
         template_env = build_template_environment()
     except RuntimeError as exc:
@@ -755,6 +912,9 @@ def main():
         print('Warning: no ROS packages found.', file=sys.stderr)
 
     for pkg_name, pkg_dir, pkg_description in packages:
+        readme_path = pkg_dir / 'README.md'
+        old_content = readme_path.read_text() if readme_path.exists() else ''
+        manual_descriptions = extract_manual_descriptions(old_content)
         msgs = find_interface_files(pkg_dir, 'msg', 'msg')
         srvs = find_interface_files(pkg_dir, 'srv', 'srv')
         actions = find_interface_files(pkg_dir, 'action', 'action')
@@ -766,13 +926,22 @@ def main():
 
         if msgs:
             entries = [(f'{pkg_name}/msg/{f.stem}', f.relative_to(pkg_dir)) for f in msgs]
-            sections.append(PackageSection(title='Messages', body=md_interface_table(entries)))
+            sections.append(PackageSection(
+                title='Messages',
+                body=md_interface_table(entries, manual_descriptions, ('Messages',)),
+            ))
         if srvs:
             entries = [(f'{pkg_name}/srv/{f.stem}', f.relative_to(pkg_dir)) for f in srvs]
-            sections.append(PackageSection(title='Services', body=md_interface_table(entries)))
+            sections.append(PackageSection(
+                title='Services',
+                body=md_interface_table(entries, manual_descriptions, ('Services',)),
+            ))
         if actions:
             entries = [(f'{pkg_name}/action/{f.stem}', f.relative_to(pkg_dir)) for f in actions]
-            sections.append(PackageSection(title='Actions', body=md_interface_table(entries)))
+            sections.append(PackageSection(
+                title='Actions',
+                body=md_interface_table(entries, manual_descriptions, ('Actions',)),
+            ))
 
         if node_sources or launch_files:
             headers = find_headers(pkg_dir)
@@ -797,7 +966,7 @@ def main():
                 for idx, node in enumerate(nodes):
                     if idx > 0:
                         node_parts.append('')
-                    node_parts.append(render_node(node))
+                    node_parts.append(render_node(node, manual_descriptions))
                 sections.append(PackageSection(title='Nodes', body='\n'.join(node_parts)))
 
             if launch_files:
@@ -807,8 +976,6 @@ def main():
 
         toc = render_toc([node.node_name for node in nodes], bool(launch_files))
         toc_lines = toc.splitlines() if toc else []
-        readme_path = pkg_dir / 'README.md'
-        old_content = readme_path.read_text() if readme_path.exists() else ''
         new_content = render_package_readme(
             template_env=template_env,
             package_name=pkg_name,
