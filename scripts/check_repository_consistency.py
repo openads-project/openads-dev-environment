@@ -766,7 +766,9 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
             continue
 
         actual_target = os.readlink(link_path)
-        if actual_target != expected_target:
+        normalized_actual_target = actual_target.rstrip("/")
+        normalized_expected_target = expected_target.rstrip("/")
+        if normalized_actual_target != normalized_expected_target:
             errors.append(
                 f"{link_name}: target mismatch (expected '{expected_target}', got '{actual_target}')"
             )
@@ -784,7 +786,7 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
         check_id="required_top_level_symlinks",
         name="Required top-level symlinks",
         passed=True,
-        message="All required top-level symlinks exist with exact targets",
+        message="All required top-level symlinks exist with expected targets",
         details=[],
     )
 
