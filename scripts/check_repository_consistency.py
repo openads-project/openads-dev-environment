@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -784,6 +785,82 @@ def check_ros_packagexml_has_required_testdepends(ctx: CheckContext) -> CheckRes
         details=[],
     )
 
+
+def check_ros_packagexml_has_required_metadata(ctx: CheckContext) -> CheckResult:
+    offenders: list[str] = []
+
+    for pkg_dir in discover_ros_package_dirs(ctx.repo_root):
+        package_xml = pkg_dir / "package.xml"
+        rel_path = str(package_xml.relative_to(ctx.repo_root))
+
+        try:
+            root = ET.fromstring(read_text(package_xml))
+        except ET.ParseError as err:
+            offenders.append(f"{rel_path}: invalid XML ({err})")
+            continue
+
+        package_name = (root.findtext("name") or "").strip()
+        if not package_name:
+            offenders.append(f"{rel_path}: missing <name>...</name>")
+
+        version = (root.findtext("version") or "").strip()
+        if not version:
+            offenders.append(f"{rel_path}: missing <version>...</version>")
+        elif version == "0.0.0":
+            offenders.append(f"{rel_path}: contains placeholder <version>0.0.0</version>")
+
+        description = (root.findtext("description") or "").strip()
+        if not description:
+            offenders.append(f"{rel_path}: missing <description>...</description>")
+
+        licenses = [(license_tag.text or "").strip() for license_tag in root.findall("license")]
+        if not any(licenses):
+            offenders.append(f"{rel_path}: missing <license>...</license>")
+        if any(value == "TODO" for value in licenses):
+            offenders.append(f"{rel_path}: contains placeholder <license>TODO</license>")
+
+        maintainers = [
+            ((maintainer.text or "").strip(), (maintainer.get("email") or "").strip())
+            for maintainer in root.findall("maintainer")
+        ]
+        if not any(name and email for name, email in maintainers):
+            offenders.append(f'{rel_path}: missing <maintainer email="...">...</maintainer>')
+        if any(name == "TODO" and email == "todo@TODO.com" for name, email in maintainers):
+            offenders.append(
+                f'{rel_path}: contains placeholder <maintainer email="todo@TODO.com">TODO</maintainer>'
+            )
+
+        authors = [
+            ((author.text or "").strip(), (author.get("email") or "").strip())
+            for author in root.findall("author")
+        ]
+        if not any(name and email for name, email in authors):
+            offenders.append(f'{rel_path}: missing <author email="...">...</author>')
+        if any(name == "TODO" and email == "todo@TODO.com" for name, email in authors):
+            offenders.append(
+                f'{rel_path}: contains placeholder <author email="todo@TODO.com">TODO</author>'
+            )
+
+    if offenders:
+        return CheckResult(
+            check_id="ros_packagexml_has_required_metadata",
+            name="ROS packages include required package.xml metadata",
+            passed=False,
+            message=(
+                "Some ROS packages are missing required package.xml metadata "
+                "or still contain TODO placeholders"
+            ),
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="ros_packagexml_has_required_metadata",
+        name="ROS packages include required package.xml metadata",
+        passed=True,
+        message="All ROS packages contain required package.xml metadata without TODO placeholders",
+        details=[],
+    )
+
 def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
     expected_links = {
         ".devcontainer": ".openads-dev-environment/.devcontainer/",
@@ -1088,6 +1165,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "ros_packagexml_has_required_testdepends": (
         "ROS CMake packages with targets include required package.xml test_depend block",
         check_ros_packagexml_has_required_testdepends,
+    ),
+    "ros_packagexml_has_required_metadata": (
+        "ROS packages include required package.xml metadata",
+        check_ros_packagexml_has_required_metadata,
     ),
     "ros_pubsub_topics_private_namespace": (
         "ROS pub/sub topics use private namespace",
