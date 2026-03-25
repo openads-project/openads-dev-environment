@@ -69,6 +69,11 @@ EXPECTED_CMAKE_LINT_LINES = """find_package(ament_lint_auto REQUIRED)
   set(ament_cmake_flake8_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../.vscode/lint/ament_flake8.ini)
   ament_lint_auto_find_test_dependencies()"""
 
+EXPECTED_PACKAGEXML_TESTDEPENDS = """  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_cmake_clang_format</test_depend>
+  <test_depend>ament_cmake_clang_tidy</test_depend>
+  <test_depend>ament_cmake_flake8</test_depend>"""
+
 
 def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -745,6 +750,40 @@ def check_ros_cmake_has_required_lint_block(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_ros_packagexml_has_required_testdepends(ctx: CheckContext) -> CheckResult:
+    offenders: list[str] = []
+
+    for pkg_dir in discover_ros_package_dirs(ctx.repo_root):
+        package_xml = pkg_dir / "package.xml"
+        if not package_xml.is_file():
+            continue
+        package_xml_text = read_text(package_xml).replace("\r\n", "\n")
+        if EXPECTED_PACKAGEXML_TESTDEPENDS not in package_xml_text:
+            offenders.append(str(package_xml.relative_to(ctx.repo_root)))
+
+    if offenders:
+        return CheckResult(
+            check_id="ros_packagexml_has_required_testdepends",
+            name="ROS packages include required package.xml test_depend block",
+            passed=False,
+            message=(
+                "Some ROS packages "
+                "do not contain the exact required package.xml test_depend lines"
+            ),
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="ros_packagexml_has_required_testdepends",
+        name="ROS packages include required package.xml test_depend block",
+        passed=True,
+        message=(
+            "All ROS packages "
+            "contain the exact required package.xml test_depend lines"
+        ),
+        details=[],
+    )
+
 def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
     expected_links = {
         ".devcontainer": ".openads-dev-environment/.devcontainer/",
@@ -1045,6 +1084,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "ros_cmake_has_required_lint_block": (
         "ROS CMake packages with targets include required lint block",
         check_ros_cmake_has_required_lint_block,
+    ),
+    "ros_packagexml_has_required_testdepends": (
+        "ROS CMake packages with targets include required package.xml test_depend block",
+        check_ros_packagexml_has_required_testdepends,
     ),
     "ros_pubsub_topics_private_namespace": (
         "ROS pub/sub topics use private namespace",
