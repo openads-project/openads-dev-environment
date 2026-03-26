@@ -102,21 +102,25 @@ class PackageTemplateContext:
 class PackageDocEntry:
     name: str
     path: str
+    description: str
 
 
 @dataclass
 class TopLevelTemplateContext:
+    title: str
     repo_name: str
     owner: str
     pages_url: str
     repo_https_url: str
     container_image: str
     badges_block: str
+    logo_path: str
     intro_block: str
     pre_quickstart_block: str
-    quickstart_package: str
-    quickstart_launch_file: str
+    quickstart_body: str
+    repository_packages_lines: list[str]
     documentation_lines: list[str]
+    licensing_body: str
     acknowledgements_body: str
 
 
@@ -694,6 +698,11 @@ PRE_QUICKSTART_PLACEHOLDER = '<!-- <img src="TODO: teaser image/gif" width=800> 
 
 ACK_PLACEHOLDER = 'TODO: Project/funding acknowledgements'
 
+MANDATORY_LICENSE_BULLETS = [
+    '- The source code in this repository is licensed under Apache-2.0. See [LICENSE](LICENSE).',
+    '- Docker images built from this repository also contain third-party software with its own license terms.',
+]
+
 
 def build_template_environment() -> Environment:
     if Environment is None or FileSystemLoader is None:
@@ -753,10 +762,9 @@ def parse_repo_remote(remote: str) -> RepoMetadata:
     provider = 'github' if host.lower() == 'github.com' else 'other'
     repo_https_url = f'https://{host}/{path}'
 
-    pages_url = ''
+    pages_url = f'https://openads-project.github.io/{repo}'
     container_image = 'TODO'
     if provider == 'github':
-        pages_url = f'https://{owner_lower}.github.io/{repo}'
         container_image = f'ghcr.io/{owner_lower}/{repo}:latest'
 
     return RepoMetadata(
@@ -771,19 +779,36 @@ def parse_repo_remote(remote: str) -> RepoMetadata:
     )
 
 
+def extract_title(readme_text: str, fallback: str) -> str:
+    """Return the first Markdown H1 title or fallback."""
+    m = re.search(r'^#\s+(.+)$', readme_text, re.MULTILINE)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    return fallback
+
+
 def extract_intro_block(readme_text: str) -> str:
     """Return repo-specific intro block (headline + paragraph) or placeholder."""
     m = re.search(
-        r'</p>\n\n(.*?)\n\n\*\*🚀 \[Quick Start\]\(#-quick-start\)\*\*'
-        r' \| \*\*🧑‍💻 \[Development\]\(#-development\)\*\*'
-        r' \| \*\*📝 \[Documentation\]\(#-documentation\)\*\*'
-        r' \| \*\*🙏 \[Acknowledgements\]\(#-acknowledgements\)\*\*',
+        r'^#\s+.+?\n\n(?:<p align="center">\n.*?\n</p>\n\n)?(.*?)(?=\n<p align="center">\n  <strong>🚀|\n> \[!IMPORTANT\]|\n##[^\n]*Quick Start|\Z)',
         readme_text,
-        re.DOTALL,
+        re.DOTALL | re.MULTILINE,
     )
     if m and m.group(1).strip():
         return m.group(1).strip()
     return INTRO_PLACEHOLDER
+
+
+def extract_h2_section_body(readme_text: str, section_title: str) -> Optional[str]:
+    """Return the body of an H2 section whose title contains section_title."""
+    m = re.search(
+        rf'^##[^\n]*{re.escape(section_title)}[^\n]*\n\n(.*?)(?=^##\s|\Z)',
+        readme_text,
+        re.DOTALL | re.MULTILINE,
+    )
+    if m and m.group(1).strip():
+        return m.group(1).rstrip()
+    return None
 
 
 def extract_pre_quickstart_block(readme_text: str) -> str:
@@ -798,12 +823,139 @@ def extract_pre_quickstart_block(readme_text: str) -> str:
     return PRE_QUICKSTART_PLACEHOLDER
 
 
+def build_quickstart_example(
+    container_image: str,
+    quickstart_package: str,
+    quickstart_launch_file: str,
+) -> str:
+    """Return clearly marked example content for the Quick Start section."""
+    return (
+        '> [!NOTE]\n'
+        '> Example only: replace this section with repository-specific quick start instructions.\n\n'
+        '1. Start a container of the pre-built runtime image.\n'
+        '    ```bash\n'
+        f'    docker run --rm -it {container_image} bash\n'
+        '    ```\n'
+        '1. Inside the container, launch the pre-built nodes.\n'
+        '    ```bash\n'
+        f'    ros2 launch {quickstart_package} {quickstart_launch_file}\n'
+        '    ```'
+    )
+
+
+def build_legacy_quickstart_example(
+    container_image: str,
+    quickstart_package: str,
+    quickstart_launch_file: str,
+) -> str:
+    """Return the previously generated Quick Start body for compatibility checks."""
+    return (
+        '1. Start a container of the pre-built runtime image.\n'
+        '    ```bash\n'
+        f'    docker run --rm -it {container_image} bash\n'
+        '    ```\n'
+        '1. Inside the container, launch the pre-built nodes.\n'
+        '    ```bash\n'
+        f'    ros2 launch {quickstart_package} {quickstart_launch_file}\n'
+        '    ```'
+    )
+
+
+def extract_quickstart_body(
+    readme_text: str,
+    container_image: str,
+    quickstart_package: str,
+    quickstart_launch_file: str,
+) -> str:
+    """Return repo-specific Quick Start body or a clearly marked example."""
+    body = extract_h2_section_body(readme_text, 'Quick Start')
+    if body:
+        legacy_body = build_legacy_quickstart_example(
+            container_image,
+            quickstart_package,
+            quickstart_launch_file,
+        )
+        if body.strip() != legacy_body.strip():
+            return body
+    return build_quickstart_example(container_image, quickstart_package, quickstart_launch_file)
+
+
 def extract_acknowledgements_body(readme_text: str) -> str:
     """Return repo-specific acknowledgements body or placeholder."""
-    m = re.search(r'^## 🙏 Acknowledgements\n\n(.*)\Z', readme_text, re.DOTALL | re.MULTILINE)
-    if m and m.group(1).strip():
-        return m.group(1).rstrip()
+    body = extract_h2_section_body(readme_text, 'Acknowledgements')
+    if body:
+        return body
     return ACK_PLACEHOLDER
+
+
+def normalize_license_line(line: str) -> str:
+    """Normalize a license list item for de-duplication."""
+    normalized = ' '.join(line.strip().split())
+    if normalized.startswith('- '):
+        normalized = normalized[2:].strip()
+    return normalized
+
+
+def trim_blank_lines(lines: list[str]) -> list[str]:
+    """Remove leading and trailing blank lines from a list of lines."""
+    trimmed = list(lines)
+    while trimmed and not trimmed[0].strip():
+        trimmed.pop(0)
+    while trimmed and not trimmed[-1].strip():
+        trimmed.pop()
+    return trimmed
+
+
+def extract_licensing_body(readme_text: str) -> str:
+    """Return mandatory licensing bullets plus any repo-specific extensions."""
+    lines = list(MANDATORY_LICENSE_BULLETS)
+    body = extract_h2_section_body(readme_text, 'Licensing')
+    if not body:
+        return '\n'.join(lines)
+
+    mandatory_keys = {normalize_license_line(line) for line in MANDATORY_LICENSE_BULLETS}
+    extra_lines = [
+        line.rstrip()
+        for line in body.splitlines()
+        if normalize_license_line(line) not in mandatory_keys
+    ]
+    extra_lines = trim_blank_lines(extra_lines)
+    if not extra_lines:
+        return '\n'.join(lines)
+
+    if extra_lines[0].lstrip().startswith('- '):
+        lines.extend(extra_lines)
+    else:
+        lines.append('')
+        lines.extend(extra_lines)
+    return '\n'.join(lines)
+
+
+def extract_repository_package_purposes(readme_text: str) -> dict[str, str]:
+    """Return manually maintained purpose text from the top-level package table."""
+    body = extract_h2_section_body(readme_text, 'Documentation')
+    if not body:
+        return {}
+
+    purposes = {}
+    in_table = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped == '| Package | Purpose |':
+            in_table = True
+            continue
+        if in_table and stripped.startswith('| ---'):
+            continue
+        if in_table and stripped.startswith('|'):
+            cells = split_table_row(line)
+            if len(cells) >= 2:
+                link_match = re.search(r'\[[^\]]+\]\(([^)]+)\)', cells[0])
+                key = link_match.group(1) if link_match else cells[0]
+                purposes[key] = cells[1]
+            continue
+        if in_table and stripped:
+            break
+    return purposes
 
 
 def render_badges(meta: RepoMetadata) -> str:
@@ -827,26 +979,46 @@ def render_badges(meta: RepoMetadata) -> str:
 
 def build_package_doc_entries(repo_root: Path, packages: list) -> list[PackageDocEntry]:
     entries = []
-    for pkg_name, pkg_dir, _ in sorted(packages, key=lambda p: p[0]):
+    for pkg_name, pkg_dir, pkg_description in sorted(packages, key=lambda p: p[0]):
         rel_readme = (pkg_dir / 'README.md').relative_to(repo_root).as_posix()
-        entries.append(PackageDocEntry(name=pkg_name, path=rel_readme))
+        entries.append(
+            PackageDocEntry(
+                name=pkg_name,
+                path=rel_readme,
+                description=pkg_description,
+            )
+        )
     return entries
 
 
-def build_documentation_lines(
-    repo_root: Path,
-    pages_url: str,
+def build_repository_package_lines(
     package_doc_entries: list[PackageDocEntry],
+    manual_purposes: dict[str, str],
 ) -> list[str]:
+    lines = [
+        '| Package | Purpose |',
+        '| --- | --- |',
+    ]
+    for entry in package_doc_entries:
+        description = manual_purposes.get(entry.path)
+        if description is None:
+            description = entry.description or 'TODO: Describe the package purpose.'
+        lines.append(f'| [{entry.name}]({entry.path}) | {description} |')
+    return lines
+
+
+def build_documentation_lines(repo_root: Path, pages_url: str) -> list[str]:
     lines = []
+    if pages_url:
+        lines.append(
+            'For further details see the respective package README files and the '
+            f'[Doxygen Documentation]({pages_url}).'
+        )
     implementation_details = repo_root / 'docs' / 'IMPLEMENTATION.md'
     if implementation_details.exists():
+        if lines:
+            lines.append('')
         lines.append('- [Implementation Details](./docs/IMPLEMENTATION.md)')
-    if pages_url:
-        lines.append(f'- [Source Code Documentation]({pages_url})')
-    lines.append('- Package Documentation')
-    for entry in package_doc_entries:
-        lines.append(f'  - [{entry.name}]({entry.path})')
     return lines
 
 
@@ -867,24 +1039,41 @@ def render_top_level_readme(
 ) -> str:
     remote = get_origin_remote(repo_root)
     meta = parse_repo_remote(remote)
+    title = extract_title(existing_readme, meta.repo)
     intro_block = extract_intro_block(existing_readme)
     pre_quickstart_block = extract_pre_quickstart_block(existing_readme)
     ack_body = extract_acknowledgements_body(existing_readme)
     quickstart_pkg, quickstart_launch_file = pick_quickstart_target(packages)
+    quickstart_body = extract_quickstart_body(
+        existing_readme,
+        meta.container_image,
+        quickstart_pkg,
+        quickstart_launch_file,
+    )
     package_doc_entries = build_package_doc_entries(repo_root, packages)
-    documentation_lines = build_documentation_lines(repo_root, meta.pages_url, package_doc_entries)
+    repository_package_purposes = extract_repository_package_purposes(existing_readme)
+    repository_packages_lines = build_repository_package_lines(
+        package_doc_entries,
+        repository_package_purposes,
+    )
+    documentation_lines = build_documentation_lines(repo_root, meta.pages_url)
+    logo_path = './assets/logo.png' if (repo_root / 'assets' / 'logo.png').exists() else ''
+    licensing_body = extract_licensing_body(existing_readme)
     context = TopLevelTemplateContext(
+        title=title,
         repo_name=meta.repo,
         owner=meta.owner,
         pages_url=meta.pages_url,
         repo_https_url=meta.repo_https_url,
         container_image=meta.container_image,
         badges_block=render_badges(meta),
+        logo_path=logo_path,
         intro_block=intro_block,
         pre_quickstart_block=pre_quickstart_block,
-        quickstart_package=quickstart_pkg,
-        quickstart_launch_file=quickstart_launch_file,
+        quickstart_body=quickstart_body,
+        repository_packages_lines=repository_packages_lines,
         documentation_lines=documentation_lines,
+        licensing_body=licensing_body,
         acknowledgements_body=ack_body,
     )
     rendered = render_template(

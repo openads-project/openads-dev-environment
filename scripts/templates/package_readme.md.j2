@@ -2,8 +2,6 @@
 
 {% if package_description %}{{ package_description }}
 
-{% endif %}{% if toc_lines %}{{ '\n'.join(toc_lines) }}
-
 {% endif %}{% for section in sections %}## {{ section.title }}
 
 {{ section.body }}{% if not loop.last %}

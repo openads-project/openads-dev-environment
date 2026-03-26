@@ -1,4 +1,6 @@
-# {{ repo_name }}
+{% if logo_path %}<img src="{{ logo_path }}" height=150 align="right">
+
+{% endif %}# {{ title }}
 
 {{ badges_block }}
 
@@ -17,14 +19,7 @@
 
 ## 🚀 Quick Start
 
-1. Start a container of the pre-built runtime image.
-    ```bash
-    docker run --rm -it {{ container_image }} bash
-    ```
-1. Inside the container, launch the pre-built nodes.
-    ```bash
-    ros2 launch {{ quickstart_package }} {{ quickstart_launch_file }}
-    ```
+{{ quickstart_body }}
 
 ## 🧑‍💻 Development
 
@@ -70,7 +65,12 @@ colcon test-result --verbose
 ## 📝 Documentation
 
 {% for line in documentation_lines %}{{ line }}
+{% endfor %}{% if documentation_lines and repository_packages_lines %}
+{% endif %}{% for line in repository_packages_lines %}{{ line }}
 {% endfor %}
+## ⚖️ Licensing
+
+{{ licensing_body }}
 
 ## 🙏 Acknowledgements
 
