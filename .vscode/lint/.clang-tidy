@@ -4,6 +4,7 @@ Checks: >
   clang-diagnostic-*,
   clang-analyzer-*,
   cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-magic-numbers,
   google-*,
   -google-runtime-references,
   readability-*
