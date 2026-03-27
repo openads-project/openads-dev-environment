@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import re
 import subprocess
@@ -130,6 +131,45 @@ def discover_ros_package_dirs(repo_root: Path) -> list[Path]:
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def generated_readme_paths(repo_root: Path) -> list[Path]:
+    paths = {repo_root / "README.md"}
+    paths.update(package_dir / "README.md" for package_dir in discover_ros_package_dirs(repo_root))
+    return sorted(paths)
+
+
+def snapshot_file_contents(paths: list[Path]) -> dict[Path, str]:
+    return {path: read_text(path) if path.exists() else "" for path in paths}
+
+
+def build_unified_diff_text(old: str, new: str, path: Path, repo_root: Path) -> str:
+    rel_path = path.relative_to(repo_root).as_posix()
+    return "".join(
+        difflib.unified_diff(
+            old.splitlines(keepends=True),
+            new.splitlines(keepends=True),
+            fromfile=f"a/{rel_path}",
+            tofile=f"b/{rel_path}",
+        )
+    ).rstrip()
+
+
+def build_readme_diff_blocks(
+    repo_root: Path,
+    before_contents: dict[Path, str],
+    after_contents: dict[Path, str],
+) -> list[str]:
+    diff_blocks: list[str] = []
+    for path in sorted(set(before_contents) | set(after_contents)):
+        old_content = before_contents.get(path, "")
+        new_content = after_contents.get(path, "")
+        if old_content == new_content:
+            continue
+        diff_text = build_unified_diff_text(old_content, new_content, path, repo_root)
+        if diff_text:
+            diff_blocks.append(diff_text)
+    return diff_blocks
 
 
 def has_cpp_node_evidence(text: str) -> bool:
@@ -1075,6 +1115,9 @@ def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
             details=[str(generator_script)],
         )
 
+    readme_paths = generated_readme_paths(ctx.repo_root)
+    before_readme_contents = snapshot_file_contents(readme_paths)
+
     try:
         before = git_status_porcelain(ctx.repo_root)
     except RuntimeError as err:
@@ -1115,23 +1158,39 @@ def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
             details=[str(err)],
         )
 
-    if before != after:
+    after_readme_contents = snapshot_file_contents(readme_paths)
+    readme_diff_blocks = build_readme_diff_blocks(
+        ctx.repo_root,
+        before_readme_contents,
+        after_readme_contents,
+    )
+
+    if before != after or readme_diff_blocks:
         before_set = set(before)
         after_set = set(after)
         added = sorted(after_set - before_set)
         removed = sorted(before_set - after_set)
-        details = []
+        details: list[str] = []
+        if readme_diff_blocks:
+            details.append("README diffs:")
+            details.extend(readme_diff_blocks)
         if added:
             details.append("Added git status entries:")
             details.extend([f"+ {line}" for line in added])
         if removed:
             details.append("Removed git status entries:")
             details.extend([f"- {line}" for line in removed])
+        if readme_diff_blocks and before != after:
+            message = "Running README generator changed README content and git status"
+        elif readme_diff_blocks:
+            message = "Running README generator changed README content"
+        else:
+            message = "Running README generator changed git status"
         return CheckResult(
             check_id="readme_generator_is_idempotent",
             name="README generator produces no git changes",
             passed=False,
-            message="Running README generator changed git status",
+            message=message,
             details=details or ["git status changed (unable to compute detailed diff)"],
         )
 
@@ -1260,6 +1319,16 @@ def colorize(text: str, color: str, enabled: bool) -> str:
     return f"{color}{text}{ANSI_RESET}"
 
 
+def print_detail(detail: str) -> None:
+    lines = detail.splitlines()
+    if not lines:
+        print("  -")
+        return
+    print(f"  - {lines[0]}")
+    for line in lines[1:]:
+        print(f"    {line}")
+
+
 def print_report(ctx: CheckContext, results: list[CheckResult]) -> None:
     colors_enabled = use_color(sys.stdout)
 
@@ -1280,7 +1349,7 @@ def print_report(ctx: CheckContext, results: list[CheckResult]) -> None:
             print(f"- {colored_check_id}")
             if result.details:
                 for detail in result.details:
-                    print(f"  - {detail}")
+                    print_detail(detail)
             else:
                 print("  - (no details provided)")
 
