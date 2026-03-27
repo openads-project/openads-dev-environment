@@ -72,6 +72,7 @@ EXPECTED_CMAKE_LINT_LINES = """find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()"""
 
 EXPECTED_PACKAGEXML_TESTDEPENDS = """  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_cmake_black</test_depend>
   <test_depend>ament_cmake_clang_format</test_depend>
   <test_depend>ament_cmake_clang_tidy</test_depend>
   <test_depend>ament_cmake_flake8</test_depend>"""
