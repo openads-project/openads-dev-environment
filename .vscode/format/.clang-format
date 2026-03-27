@@ -3,6 +3,10 @@
 Language: Cpp
 BasedOnStyle: Google
 
-ColumnLimit: 120
+ColumnLimit: 130
 IncludeBlocks: Preserve
 ReflowComments: false
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+BinPackParameters: false
