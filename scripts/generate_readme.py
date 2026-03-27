@@ -94,7 +94,6 @@ class PackageSection:
 class PackageTemplateContext:
     package_name: str
     package_description: str
-    toc_lines: list[str]
     sections: list[PackageSection]
 
 
@@ -654,14 +653,6 @@ def print_diff(old: str, new: str, path: Path) -> None:
         sys.stderr.write(f'{color}{line}{RESET if color else ""}')
 
 
-def render_toc(node_names: list, has_launch_files: bool) -> str:
-    entries = []
-    if node_names:
-        entries.append('- [Nodes](#nodes)')
-        entries += [f'  - [{name}](#{name})' for name in node_names]
-    if has_launch_files:
-        entries.append('- [Launch Files](#launch-files)')
-    return '\n'.join(entries)
 
 
 def extract_package_description(readme_text: str, fallback: str) -> str:
@@ -676,13 +667,11 @@ def render_package_readme(
     template_env: Environment,
     package_name: str,
     package_description: str,
-    toc_lines: list[str],
     sections: list[PackageSection],
 ) -> str:
     context = PackageTemplateContext(
         package_name=package_name,
         package_description=package_description,
-        toc_lines=toc_lines,
         sections=sections,
     )
     rendered = render_template(
@@ -704,12 +693,37 @@ INTRO_PLACEHOLDER = (
 
 PRE_QUICKSTART_PLACEHOLDER = '<!-- <img src="TODO: teaser image/gif" width=800> -->'
 
-ACK_PLACEHOLDER = 'TODO: Project/funding acknowledgements'
+ACK_PLACEHOLDER = (
+    'Development and maintenance of this repository are supported by the following '
+    'projects. We acknowledge the funding of the respective institutions.\n\n'
+    '| Project | Funding Institution | Grant Number |\n'
+    '| --- | --- | --- |\n'
+    '| TODO | TODO | TODO |\n\n'
+    '<p>\n'
+    '  <img src="https://www.drought.uni-freiburg.de/stressres/images/bmftr-logo/image" height=70>\n'
+    '  <img src="https://ec.europa.eu/regional_policy/images/information-sources/logo-download-center/eu_funded_en.jpg" height=70>\n'
+    '</p>\n\n'
+    '<sup><sup>Funded by the European Union. Views and opinions expressed are however '
+    'those of the author(s) only and do not necessarily reflect those of the European '
+    'Union or the European Climate, Infrastructure and Environment Executive Agency '
+    '(CINEA). Neither the European Union nor CINEA can be held responsible for them.'    '</sup></sup>'
+)
 
-MANDATORY_LICENSE_BULLETS = [
-    '- The source code in this repository is licensed under Apache-2.0. See [LICENSE](LICENSE).',
-    '- Docker images built from this repository also contain third-party software with its own license terms.',
-]
+LICENSE_BODY = (
+    'The source code in this repository is licensed under Apache-2.0, '
+    'see [LICENSE](LICENSE). Container images provided by this repository '
+    'may contain third-party software shipped with their own license terms.'
+)
+
+
+def trim_blank_lines(lines: list[str]) -> list[str]:
+    """Remove leading and trailing blank lines from a list of lines."""
+    trimmed = list(lines)
+    while trimmed and not trimmed[0].strip():
+        trimmed.pop(0)
+    while trimmed and not trimmed[-1].strip():
+        trimmed.pop()
+    return trimmed
 
 
 def build_template_environment() -> Environment:
@@ -787,12 +801,6 @@ def parse_repo_remote(remote: str) -> RepoMetadata:
     )
 
 
-def extract_title(readme_text: str, fallback: str) -> str:
-    """Return the first Markdown H1 title or fallback."""
-    m = re.search(r'^#\s+(.+)$', readme_text, re.MULTILINE)
-    if m and m.group(1).strip():
-        return m.group(1).strip()
-    return fallback
 
 
 def extract_intro_block(readme_text: str) -> str:
@@ -851,22 +859,6 @@ def build_quickstart_example(
     )
 
 
-def build_legacy_quickstart_example(
-    container_image: str,
-    quickstart_package: str,
-    quickstart_launch_file: str,
-) -> str:
-    """Return the previously generated Quick Start body for compatibility checks."""
-    return (
-        '1. Start a container of the pre-built runtime image.\n'
-        '    ```bash\n'
-        f'    docker run --rm -it {container_image} bash\n'
-        '    ```\n'
-        '1. Inside the container, launch the pre-built nodes.\n'
-        '    ```bash\n'
-        f'    ros2 launch {quickstart_package} {quickstart_launch_file}\n'
-        '    ```'
-    )
 
 
 def extract_quickstart_body(
@@ -878,65 +870,36 @@ def extract_quickstart_body(
     """Return repo-specific Quick Start body or a clearly marked example."""
     body = extract_h2_section_body(readme_text, 'Quick Start')
     if body:
-        legacy_body = build_legacy_quickstart_example(
-            container_image,
-            quickstart_package,
-            quickstart_launch_file,
-        )
-        if body.strip() != legacy_body.strip():
-            return body
+        return body
     return build_quickstart_example(container_image, quickstart_package, quickstart_launch_file)
 
 
 def extract_acknowledgements_body(readme_text: str) -> str:
-    """Return repo-specific acknowledgements body or placeholder."""
+    """Return repo-specific acknowledgements body or the structured default."""
     body = extract_h2_section_body(readme_text, 'Acknowledgements')
     if body:
         return body
     return ACK_PLACEHOLDER
 
 
-def normalize_license_line(line: str) -> str:
-    """Normalize a license list item for de-duplication."""
-    normalized = ' '.join(line.strip().split())
-    if normalized.startswith('- '):
-        normalized = normalized[2:].strip()
-    return normalized
-
-
-def trim_blank_lines(lines: list[str]) -> list[str]:
-    """Remove leading and trailing blank lines from a list of lines."""
-    trimmed = list(lines)
-    while trimmed and not trimmed[0].strip():
-        trimmed.pop(0)
-    while trimmed and not trimmed[-1].strip():
-        trimmed.pop()
-    return trimmed
 
 
 def extract_licensing_body(readme_text: str) -> str:
-    """Return mandatory licensing bullets plus any repo-specific extensions."""
-    lines = list(MANDATORY_LICENSE_BULLETS)
+    """Return the fixed licensing body plus any repo-specific extensions."""
     body = extract_h2_section_body(readme_text, 'Licensing')
     if not body:
-        return '\n'.join(lines)
+        return LICENSE_BODY
 
-    mandatory_keys = {normalize_license_line(line) for line in MANDATORY_LICENSE_BULLETS}
-    extra_lines = [
-        line.rstrip()
-        for line in body.splitlines()
-        if normalize_license_line(line) not in mandatory_keys
-    ]
-    extra_lines = trim_blank_lines(extra_lines)
-    if not extra_lines:
-        return '\n'.join(lines)
+    if body.strip() == LICENSE_BODY:
+        return LICENSE_BODY
 
-    if extra_lines[0].lstrip().startswith('- '):
-        lines.extend(extra_lines)
-    else:
-        lines.append('')
-        lines.extend(extra_lines)
-    return '\n'.join(lines)
+    if body.startswith(LICENSE_BODY):
+        extra_lines = trim_blank_lines(body[len(LICENSE_BODY):].splitlines())
+        if extra_lines:
+            return LICENSE_BODY + '\n\n' + '\n'.join(extra_lines)
+        return LICENSE_BODY
+
+    return LICENSE_BODY + '\n\n' + body
 
 
 def extract_repository_package_purposes(readme_text: str) -> dict[str, str]:
@@ -1041,7 +1004,6 @@ def render_top_level_readme(
 ) -> str:
     remote = get_origin_remote(repo_root)
     meta = parse_repo_remote(remote)
-    title = meta.repo
     intro_block = extract_intro_block(existing_readme)
     pre_quickstart_block = extract_pre_quickstart_block(existing_readme)
     ack_body = extract_acknowledgements_body(existing_readme)
@@ -1062,7 +1024,7 @@ def render_top_level_readme(
     logo_path = './assets/logo.png' if (repo_root / 'assets' / 'logo.png').exists() else ''
     licensing_body = extract_licensing_body(existing_readme)
     context = TopLevelTemplateContext(
-        title=title,
+        title=meta.repo,
         repo_name=meta.repo,
         owner=meta.owner,
         pages_url=meta.pages_url,
@@ -1166,13 +1128,10 @@ def main():
                     PackageSection(title='Launch Files', body=render_launch_files(launch_files, pkg_dir))
                 )
 
-        toc = render_toc([node.node_name for node in nodes], bool(launch_files))
-        toc_lines = toc.splitlines() if toc else []
         new_content = render_package_readme(
             template_env=template_env,
             package_name=pkg_name,
             package_description=pkg_description,
-            toc_lines=toc_lines,
             sections=sections,
         )
         readme_path.write_text(new_content)
