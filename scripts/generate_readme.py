@@ -464,6 +464,56 @@ def extract_manual_descriptions(readme_text: str) -> dict[tuple, str]:
     return result
 
 
+def extract_manual_node_texts(readme_text: str) -> dict[str, str]:
+    """Extract manually maintained free text directly below node headings."""
+    result = {}
+    lines = readme_text.splitlines()
+    in_nodes_section = False
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        if re.match(r'^##\s+Nodes\s*$', line.strip()):
+            in_nodes_section = True
+            i += 1
+            continue
+
+        if in_nodes_section and re.match(r'^##\s+', line):
+            in_nodes_section = False
+
+        if not in_nodes_section:
+            i += 1
+            continue
+
+        heading_match = re.match(r'^###\s+`([^`]+)`\s*$', line)
+        if not heading_match:
+            i += 1
+            continue
+
+        node_name = heading_match.group(1)
+        i += 1
+        body_lines = []
+
+        while i < len(lines):
+            current = lines[i]
+            stripped = current.strip()
+
+            if re.match(r'^##\s+', current) or re.match(r'^###\s+', current):
+                break
+            if stripped == '```mermaid' or re.match(r'^####\s+', current):
+                break
+
+            body_lines.append(current)
+            i += 1
+
+        trimmed = trim_blank_lines(body_lines)
+        if trimmed:
+            result[node_name] = '\n'.join(trimmed)
+
+    return result
+
+
 def render_manual_cell(
     manual_descriptions: dict[tuple, str],
     heading_path: tuple[str, ...],
@@ -576,8 +626,15 @@ def render_node_diagram(node: NodeInterfaces) -> str:
     return '\n'.join(lines)
 
 
-def render_node(node: NodeInterfaces, manual_descriptions: dict[tuple, str]) -> str:
+def render_node(
+    node: NodeInterfaces,
+    manual_descriptions: dict[tuple, str],
+    manual_node_texts: dict[str, str],
+) -> str:
     parts = [f'### `{node.node_name}`']
+    manual_node_text = manual_node_texts.get(node.node_name, '')
+    if manual_node_text:
+        parts += ['', manual_node_text]
     if node.subscribers or node.publishers or node.service_servers or node.action_servers:
         parts += ['', render_node_diagram(node)]
     if node.subscribers:
@@ -1069,6 +1126,7 @@ def main():
         old_content = readme_path.read_text() if readme_path.exists() else ''
         pkg_description = extract_package_description(old_content, pkg_description)
         manual_descriptions = extract_manual_descriptions(old_content)
+        manual_node_texts = extract_manual_node_texts(old_content)
         msgs = find_interface_files(pkg_dir, 'msg', 'msg')
         srvs = find_interface_files(pkg_dir, 'srv', 'srv')
         actions = find_interface_files(pkg_dir, 'action', 'action')
@@ -1120,7 +1178,7 @@ def main():
                 for idx, node in enumerate(nodes):
                     if idx > 0:
                         node_parts.append('')
-                    node_parts.append(render_node(node, manual_descriptions))
+                    node_parts.append(render_node(node, manual_descriptions, manual_node_texts))
                 sections.append(PackageSection(title='Nodes', body='\n'.join(node_parts)))
 
             if launch_files:
