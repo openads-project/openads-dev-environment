@@ -912,7 +912,7 @@ def extract_repository_package_purposes(readme_text: str) -> dict[str, str]:
     in_table = False
     for line in body.splitlines():
         stripped = line.strip()
-        if stripped == '| Package | Purpose |':
+        if stripped == '| Package | Description |':
             in_table = True
             continue
         if in_table and stripped.startswith('| ---'):
@@ -966,7 +966,7 @@ def build_repository_package_lines(
     manual_purposes: dict[str, str],
 ) -> list[str]:
     lines = [
-        '| Package | Purpose |',
+        '| Package | Description |',
         '| --- | --- |',
     ]
     for entry in package_doc_entries:
@@ -981,8 +981,8 @@ def build_documentation_lines(repo_root: Path, pages_url: str) -> list[str]:
     lines = []
     if pages_url:
         lines.append(
-            'For further details see the respective package README files and the '
-            f'[Documentation]({pages_url}).'
+            'Package and node interfaces are documented in the respective package READMEs listed below.'
+            f'Implementation details are found in the [Source Code Documentation]({pages_url}).'
         )
     return lines
 
