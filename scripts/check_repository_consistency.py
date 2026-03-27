@@ -144,6 +144,15 @@ def snapshot_file_contents(paths: list[Path]) -> dict[Path, str]:
     return {path: read_text(path) if path.exists() else "" for path in paths}
 
 
+def find_todo_lines(path: Path) -> list[str]:
+    matches: list[str] = []
+    for line_no, line in enumerate(read_text(path).splitlines(), start=1):
+        if "TODO" not in line:
+            continue
+        matches.append(f"{line_no}: {line.strip()}")
+    return matches
+
+
 def build_unified_diff_text(old: str, new: str, path: Path, repo_root: Path) -> str:
     rel_path = path.relative_to(repo_root).as_posix()
     return "".join(
@@ -1204,6 +1213,34 @@ def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_generated_readmes_have_no_todo(ctx: CheckContext) -> CheckResult:
+    offenders: list[str] = []
+
+    for readme_path in generated_readme_paths(ctx.repo_root):
+        if not readme_path.exists():
+            continue
+        rel_path = readme_path.relative_to(ctx.repo_root).as_posix()
+        todo_lines = find_todo_lines(readme_path)
+        offenders.extend(f"{rel_path}:{line}" for line in todo_lines)
+
+    if offenders:
+        return CheckResult(
+            check_id="generated_readmes_have_no_todo",
+            name='Top-level and generated package READMEs contain no "TODO"',
+            passed=False,
+            message='Found "TODO" placeholders in top-level or generated package README files',
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="generated_readmes_have_no_todo",
+        name='Top-level and generated package READMEs contain no "TODO"',
+        passed=True,
+        message='Top-level and generated package README files contain no "TODO" placeholders',
+        details=[],
+    )
+
+
 CHECKS: dict[str, tuple[str, CheckFn]] = {
     "no_top_level_package_xml": ("No top-level package.xml", check_no_top_level_package_xml),
     "top_level_license_apache2": (
@@ -1257,6 +1294,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "readme_generator_is_idempotent": (
         "README generator produces no git changes",
         check_readme_generator_is_idempotent,
+    ),
+    "generated_readmes_have_no_todo": (
+        'Top-level and generated package READMEs contain no "TODO"',
+        check_generated_readmes_have_no_todo,
     ),
 }
 

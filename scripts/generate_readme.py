@@ -407,6 +407,12 @@ def sanitize_manual_content(content: str) -> str:
     return content.strip()
 
 
+def render_table_cell(content: str) -> str:
+    """Render Markdown table cells with an explicit placeholder for blank values."""
+    normalized = content.strip()
+    return normalized if normalized else 'TODO'
+
+
 def manual_key(heading_path: tuple[str, ...], table_kind: str, row_cells: list[str]) -> tuple:
     return (
         tuple(heading_path),
@@ -522,8 +528,8 @@ def render_manual_cell(
 ) -> str:
     exact = manual_descriptions.get(manual_key(heading_path, table_kind, row_cells), '')
     if exact:
-        return exact
-    return manual_descriptions.get(fallback_manual_key(table_kind, row_cells), '')
+        return render_table_cell(exact)
+    return render_table_cell(manual_descriptions.get(fallback_manual_key(table_kind, row_cells), ''))
 
 
 def md_topic_table(
@@ -570,7 +576,10 @@ def md_service_table(
 
 def md_launch_args_table(args: list) -> str:
     rows = ['| Argument | Default | Description |', '| --- | --- | --- |']
-    rows += [f'| `{name}` | `{default}` | {description} |' for name, default, description in args]
+    rows += [
+        f'| `{render_table_cell(name)}` | `{render_table_cell(default)}` | {render_table_cell(description)} |'
+        for name, default, description in args
+    ]
     return '\n'.join(rows)
 
 
@@ -601,8 +610,11 @@ def render_launch_files(launch_files: list, doc_root: Path) -> str:
 
 def md_parameter_table(params: list) -> str:
     rows = ['| Parameter | Type | Default | Description |', '| --- | --- | --- | --- |']
-    rows += [f'| `{p.name}` | `{p.ros_type}` | `{p.default}` | {p.description} |'
-             for p in params]
+    rows += [
+        f'| `{render_table_cell(p.name)}` | `{render_table_cell(p.ros_type)}` | '
+        f'`{render_table_cell(p.default)}` | {render_table_cell(p.description)} |'
+        for p in params
+    ]
     return '\n'.join(rows)
 
 
