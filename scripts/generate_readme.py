@@ -901,10 +901,8 @@ def build_quickstart_example(
     quickstart_package: str,
     quickstart_launch_file: str,
 ) -> str:
-    """Return clearly marked example content for the Quick Start section."""
+    """Return the default Quick Start content for the top-level README."""
     return (
-        '> [!NOTE]\n'
-        '> Example only: replace this section with repository-specific quick start instructions.\n\n'
         '1. Start a container of the pre-built runtime image.\n'
         '    ```bash\n'
         f'    docker run --rm -it {container_image} bash\n'
@@ -912,7 +910,22 @@ def build_quickstart_example(
         '1. Inside the container, launch the pre-built nodes.\n'
         '    ```bash\n'
         f'    ros2 launch {quickstart_package} {quickstart_launch_file}\n'
-        '    ```'
+        '    ```\n\n'
+        '<!-- TODO: replace default quick start with repo-specific demo (Docker Compose)\n\n'
+        '1. Launch a container of the pre-built runtime image in the provided demo [Docker Compose](demo/docker-compose.yml) setup.\n'
+        '    ```bash\n'
+        '    cd demo\n'
+        '    xhost +local: # allow GUI forwarding from containers\n'
+        '    docker compose up\n'
+        '    ```\n'
+        '1. Observe ...\n'
+        '1. Stop the demo and clean up.\n'
+        '    > *Ctrl+C*\n'
+        '    ```bash\n'
+        '    docker compose down\n'
+        '    xhost -local: # revoke GUI forwarding permissions\n'
+        '    ```\n'
+        '-->'
     )
 
 
@@ -924,7 +937,7 @@ def extract_quickstart_body(
     quickstart_package: str,
     quickstart_launch_file: str,
 ) -> str:
-    """Return repo-specific Quick Start body or a clearly marked example."""
+    """Return repo-specific Quick Start body or the default generated content."""
     body = extract_h2_section_body(readme_text, 'Quick Start')
     if body:
         return body
