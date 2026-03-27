@@ -664,6 +664,14 @@ def render_toc(node_names: list, has_launch_files: bool) -> str:
     return '\n'.join(entries)
 
 
+def extract_package_description(readme_text: str, fallback: str) -> str:
+    """Return a manually maintained package intro block or the package.xml fallback."""
+    m = re.search(r'^#\s+.+?\n\n(.*?)(?=^##\s|\Z)', readme_text, re.DOTALL | re.MULTILINE)
+    if m and m.group(1).strip():
+        return m.group(1).rstrip()
+    return fallback
+
+
 def render_package_readme(
     template_env: Environment,
     package_name: str,
@@ -959,11 +967,10 @@ def extract_repository_package_purposes(readme_text: str) -> dict[str, str]:
 
 
 def render_badges(meta: RepoMetadata) -> str:
-    lines = [
-        '<p align="center">',
-        '  <a href="https://github.com/openads-project"><img src="https://img.shields.io/badge/OpenADS-f5ff01"/></a>',
-        '  <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>',
-    ]
+    lines = ['<p align="center">']
+    if meta.provider == 'github' and meta.owner_lower == 'openads-project':
+        lines.append('  <a href="https://github.com/openads-project"><img src="https://img.shields.io/badge/OpenADS-f5ff01"/></a>')
+    lines.append('  <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>')
     if meta.provider == 'github':
         lines.extend([
             f'  <a href="{meta.repo_https_url}/releases/latest"><img src="https://img.shields.io/github/v/release/{meta.owner}/{meta.repo}"/></a>',
@@ -1012,13 +1019,8 @@ def build_documentation_lines(repo_root: Path, pages_url: str) -> list[str]:
     if pages_url:
         lines.append(
             'For further details see the respective package README files and the '
-            f'[Doxygen Documentation]({pages_url}).'
+            f'[Documentation]({pages_url}).'
         )
-    implementation_details = repo_root / 'docs' / 'IMPLEMENTATION.md'
-    if implementation_details.exists():
-        if lines:
-            lines.append('')
-        lines.append('- [Implementation Details](./docs/IMPLEMENTATION.md)')
     return lines
 
 
@@ -1039,7 +1041,7 @@ def render_top_level_readme(
 ) -> str:
     remote = get_origin_remote(repo_root)
     meta = parse_repo_remote(remote)
-    title = extract_title(existing_readme, meta.repo)
+    title = meta.repo
     intro_block = extract_intro_block(existing_readme)
     pre_quickstart_block = extract_pre_quickstart_block(existing_readme)
     ack_body = extract_acknowledgements_body(existing_readme)
@@ -1103,6 +1105,7 @@ def main():
     for pkg_name, pkg_dir, pkg_description in packages:
         readme_path = pkg_dir / 'README.md'
         old_content = readme_path.read_text() if readme_path.exists() else ''
+        pkg_description = extract_package_description(old_content, pkg_description)
         manual_descriptions = extract_manual_descriptions(old_content)
         msgs = find_interface_files(pkg_dir, 'msg', 'msg')
         srvs = find_interface_files(pkg_dir, 'srv', 'srv')
