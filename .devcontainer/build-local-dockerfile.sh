@@ -75,6 +75,82 @@ use_local_build() {
     [[ "${value}" == "1" || "${value}" == "true" || "${value}" == "yes" || "${value}" == "on" ]]
 }
 
+generate_docker_ros_env_file() {
+    local output_file="$1"
+    local workflow_file=".github/workflows/docker-ros.yml"
+
+    if [[ ! -f "${workflow_file}" ]]; then
+        echo "docker-ros workflow file '${workflow_file}' not found" >&2
+        return 1
+    fi
+
+    if ! awk '
+        function escape_env_value(value) {
+            gsub(/\\/, "\\\\", value)
+            gsub(/"/, "\\\"", value)
+            return value
+        }
+
+        BEGIN {
+            in_with = 0
+            with_indent = -1
+            entry_count = 0
+        }
+
+        {
+            line = $0
+
+            if (!in_with) {
+                if (line ~ /^[[:space:]]*with:[[:space:]]*$/) {
+                    match(line, /[^[:space:]]/)
+                    with_indent = RSTART - 1
+                    in_with = 1
+                }
+                next
+            }
+
+            if (line ~ /^[[:space:]]*$/) {
+                next
+            }
+
+            match(line, /[^[:space:]]/)
+            indent = RSTART - 1
+            if (indent <= with_indent) {
+                exit
+            }
+            if (indent != with_indent + 2) {
+                next
+            }
+
+            entry = line
+            sub(/^[[:space:]]+/, "", entry)
+            key = entry
+            sub(/:.*/, "", key)
+            value = entry
+            sub(/^[^:]+:[[:space:]]*/, "", value)
+
+            gsub(/-/, "_", key)
+            key = toupper(key)
+            if (key == "TARGET") {
+                next
+            }
+            value = escape_env_value(value)
+
+            printf "%s=\"%s\"\n", key, value
+            entry_count++
+        }
+
+        END {
+            if (entry_count == 0) {
+                exit 1
+            }
+        }
+    ' "${workflow_file}" > "${output_file}"; then
+        echo "Failed to generate docker-ros env file from '${workflow_file}'" >&2
+        return 1
+    fi
+}
+
 # helper function to build image locally with docker-ros
 build_with_docker_ros() {
 
@@ -104,21 +180,17 @@ build_with_docker_ros() {
         docker_ros_created=true
     fi
 
-    # docker-ros reads IMAGE from .env; override it only for this build invocation.
+    # docker-ros reads its build configuration from .env; generate it only for this build invocation.
     if [[ -f "${env_file}" ]]; then
         env_had_file=true
         cp "${env_file}" "${env_backup}"
     fi
     trap 'if [[ "${env_had_file}" == "true" ]]; then mv "${env_backup}" "${env_file}"; else rm -f "${env_file}"; fi' RETURN
-    if [[ -f "${env_file}" ]]; then
-        if grep -q '^IMAGE=' "${env_file}"; then
-            sed -i "s~^IMAGE=.*~IMAGE=\"${image}\"~" "${env_file}"
-        else
-            printf "\nIMAGE=\"%s\"\n" "${image}" >> "${env_file}"
-        fi
-    else
-        printf "IMAGE=\"%s\"\n" "${image}" > "${env_file}"
+    if ! generate_docker_ros_env_file "${env_file}"; then
+        return 1
     fi
+    printf "TARGET=\"dev\"\n" >> "${env_file}"
+    printf "\nIMAGE=\"%s\"\n" "${image}" >> "${env_file}"
 
     "${docker_ros_dir}/scripts/build.sh"
     build_exit_code=$?
