@@ -50,6 +50,35 @@ This repository contains common development environment configuration, including
 - [.devcontainer](#devcontainer) definition for developing and debugging in container images built by [docker-ros](https://github.com/ika-rwth-aachen/docker-ros)
 - CI templates for [GitLab](.gitlab-ci.template.yml) and [GitHub](.github/workflows/), covering the same `docker-ros`, `repository consistency`, and `documentation` content
 - [pre-commit](.pre-commit-config.yaml) configuration for running linting and formatting
+- a repository consistency checker script for verifying that consuming repositories follow the expected OpenADS setup
+
+### Repository consistency checks
+
+Use [`scripts/check_repository_consistency.py`](scripts/check_repository_consistency.py) to validate that a repository using this development environment still matches the expected structure and conventions.
+
+```bash
+python3 .openads-dev-environment/scripts/check_repository_consistency.py
+```
+
+You can limit execution to specific checks with `--only <check_id[,check_id...]>` or skip checks with `--skip <check_id[,check_id...]>`.
+
+| Name | Description |
+| --- | --- |
+| `no_top_level_package_xml` | Passes when the repository root does not contain a `package.xml`. ROS packages must live in subdirectories instead of treating the whole repository as one package. |
+| `top_level_license_apache2` | Passes when a top-level `LICENSE` file exists and contains the Apache 2.0 license text markers (`Apache License`, `Version 2.0, January 2004`, `http://www.apache.org/licenses/`). |
+| `source_files_have_copyright_notice` | Passes when every tracked `.cpp`, `.hpp`, and `.py` file contains the required IKA copyright notice and `SPDX-License-Identifier: Apache-2.0` near the top of the file. |
+| `ros_nodes_have_parameter_loader` | Passes when each detected ROS node source file defines the required parameter helper: `declareAndLoadParameter` for C++ nodes or `declare_and_load_parameter` for Python nodes. |
+| `ros_cmake_has_required_lint_block` | Passes when every ROS package `CMakeLists.txt` that declares targets with `add_executable(...)` or `add_library(...)` contains the exact required `ament_lint_auto` block, including the configured `.clang-format`, `.clang-tidy`, and `ament_flake8.ini` paths. |
+| `ros_packagexml_has_required_testdepends` | Passes when every ROS package `package.xml` contains the exact required `<test_depend>` block for `ament_lint_auto`, `ament_cmake_black`, `ament_cmake_clang_format`, `ament_cmake_clang_tidy`, and `ament_cmake_flake8`. |
+| `ros_packagexml_has_required_metadata` | Passes when every ROS package `package.xml` is valid XML and contains non-placeholder `<name>`, non-`0.0.0` `<version>`, `<description>`, at least one non-empty `<license>`, and at least one `<maintainer email="...">...</maintainer>` plus `<author email="...">...</author>` entry that are not left at the default `TODO` placeholder values. |
+| `ros_pubsub_topics_private_namespace` | Passes when string-literal topic and service names passed to ROS `create_publisher`, `create_subscription`, `create_service`, and `create_client` calls use the private namespace form `~/...` instead of global or relative names. |
+| `demo_launch_remappable_topics_cover_node_pubsub` | Passes when each launch file in `ros2_demo_package/launch/` lists every string-literal pub/sub/service/client name used by the launched node executables in its `remappable_topics` launch arguments. If `ros2_demo_package/launch/` does not exist, the check is skipped as passing. |
+| `required_top_level_symlinks` | Passes when the repository root contains symlinks `.devcontainer -> .openads-dev-environment/.devcontainer/`, `.vscode -> .openads-dev-environment/.vscode/`, and `.pre-commit-config.yaml -> .openads-dev-environment/.pre-commit-config.yaml`. |
+| `required_root_ci_workflows` | Passes when `.github/workflows/` contains `docker-ros.yml`, `docs.yml`, and `consistency.yml`. |
+| `root_ci_workflows_match_templates` | Passes when the root workflow files `.github/workflows/docs.yml` and `.github/workflows/consistency.yml` exactly match the corresponding templates in `.openads-dev-environment/.github/workflow_calls/`. |
+| `dev_environment_at_remote_main` | Passes when `.openads-dev-environment` is present as a git repository and its current `HEAD` exactly matches `origin/main`. Update the submodule if it points to any other commit. |
+| `readme_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_readme.py` produces no README content changes and no additional git status changes. Re-run the generator and commit the result until a second run is clean. |
+| `generated_readmes_have_no_todo` | Passes when the repository top-level `README.md` and every generated package `README.md` contain no `TODO` placeholders. Replace all remaining placeholder text before committing. |
 
 ### .vscode
 
