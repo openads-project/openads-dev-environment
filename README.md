@@ -21,7 +21,7 @@ This repository defines a common development environment for components of [🚗
     ln -s .openads-dev-environment/.devcontainer .devcontainer
     ln -s .openads-dev-environment/.pre-commit-config.yaml .pre-commit-config.yaml
     ```
-3. Copy the CI template into your repository. Differ between:
+3. Copy the CI template into your repository. Choose one of the following:
 
    GitLab:
     ```bash

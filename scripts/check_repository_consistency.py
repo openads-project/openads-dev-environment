@@ -793,10 +793,10 @@ def check_ros_cmake_has_required_lint_block(ctx: CheckContext) -> CheckResult:
         check_id="ros_cmake_has_required_lint_block",
         name="ROS CMake packages with targets include required lint block",
         passed=True,
-            message=(
-                "All ROS CMake packages with add_executable/add_library targets "
-                "contain the exact required lint lines"
-            ),
+        message=(
+            "All ROS CMake packages with add_executable/add_library targets "
+            "contain the exact required lint lines"
+        ),
         details=[],
     )
 

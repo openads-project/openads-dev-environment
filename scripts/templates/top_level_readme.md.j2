@@ -63,8 +63,7 @@ colcon test-result --verbose
 ## 📝 Documentation
 
 {% for line in documentation_lines %}{{ line }}
-{% endfor %}{% if documentation_lines and repository_packages_lines %}
-{% endif %}{% for line in repository_packages_lines %}{{ line }}
+{% endfor %}{% for line in repository_packages_lines %}{{ line }}
 {% endfor %}
 ## ⚖️ Licensing
 
