@@ -39,9 +39,16 @@
 
     // attach to external Zenoh router if devcontainer should connect to other containers
     //"--network=TODO",
-    //"--env", "RMW_IMPLEMENTATION=rmw_zenoh_cpp",
-    //"--env", "ZENOH_CONFIG_OVERRIDE=connect/endpoints=[\"tcp/zenoh-router:7447\"]",
   ],
+
+  "containerEnv": {
+    // allow global pip installs (required by rosdep)
+    "PIP_BREAK_SYSTEM_PACKAGES": "1",
+
+    // attach to external Zenoh router if devcontainer should connect to other containers
+    // "RMW_IMPLEMENTATION": "rmw_zenoh_cpp",
+    // "ZENOH_CONFIG_OVERRIDE": "connect/endpoints=[\"tcp/zenoh-router:7447\"]",
+  },
 
   // https://containers.dev/features
   "features": {},
