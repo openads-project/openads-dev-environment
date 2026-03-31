@@ -113,7 +113,6 @@ class TopLevelTemplateContext:
     repo_https_url: str
     container_image: str
     badges_block: str
-    logo_path: str
     intro_block: str
     pre_quickstart_block: str
     quickstart_body: str
@@ -1045,16 +1044,6 @@ def render_badges(meta: RepoMetadata) -> str:
     return '\n'.join(lines)
 
 
-def find_logo_path(repo_root: Path) -> str:
-    assets_dir = repo_root / "assets"
-    if not assets_dir.is_dir():
-        return ""
-    matches = sorted(path for path in assets_dir.glob("logo.*") if path.is_file())
-    if not matches:
-        return ""
-    return f"./{matches[0].relative_to(repo_root).as_posix()}"
-
-
 def build_package_doc_entries(repo_root: Path, packages: list) -> list[PackageDocEntry]:
     entries = []
     for pkg_name, pkg_dir, pkg_description in sorted(packages, key=lambda p: p[0]):
@@ -1129,7 +1118,6 @@ def render_top_level_readme(
         repository_package_purposes,
     )
     documentation_lines = build_documentation_lines(repo_root, meta.pages_url)
-    logo_path = find_logo_path(repo_root)
     licensing_body = extract_licensing_body(existing_readme)
     context = TopLevelTemplateContext(
         title=meta.repo,
@@ -1139,7 +1127,6 @@ def render_top_level_readme(
         repo_https_url=meta.repo_https_url,
         container_image=meta.container_image,
         badges_block=render_badges(meta),
-        logo_path=logo_path,
         intro_block=intro_block,
         pre_quickstart_block=pre_quickstart_block,
         quickstart_body=quickstart_body,

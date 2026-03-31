@@ -1,17 +1,6 @@
 # {{ title }}
 
-{% if logo_path %}<table align="center">
-  <tr>
-    <td align="center" valign="middle">
-{{ badges_block | indent(6, true) }}
-    </td>
-    <td align="center" valign="middle">
-      <img src="{{ logo_path }}" height="80" alt="{{ title }} logo">
-    </td>
-  </tr>
-</table>{% else %}
 {{ badges_block }}
-{% endif %}
 
 {{ intro_block }}
 
