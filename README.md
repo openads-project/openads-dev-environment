@@ -97,9 +97,9 @@ Select *Ctrl+Shift+P / Run Task* to run a task. Tasks are defined in [`tasks.jso
 
 | Name | Description |
 | --- | --- |
-| Build | Builds ROS workspace using `colcon` (`Ctrl+Shift+B`) |
-| Build with Build Type | Builds ROS workspace using `colcon` with given build type |
-| Test | Runs tests in ROS workspace using `colcon` |
+| Build | Builds ROS target workspace using `colcon` (`Ctrl+Shift+B`) |
+| Build with Build Type | Builds ROS target workspace using `colcon` with given build type |
+| Test | Runs tests in ROS target workspace using `colcon` |
 | Clean | Removes all build artifacts from ROS workspace |
 | Clean CMake cache | Builds CMake's clean target |
 | New ROS 2 Package | Creates a new ROS 2 package using [`ros2-pkg-create`](https://github.com/ika-rwth-aachen/ros2-pkg-create) |

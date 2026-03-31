@@ -7,7 +7,7 @@
 
     {
       "label": "Build",
-      "detail": "Builds ROS target-workspace including required dependencies using 'colcon'",
+      "detail": "Builds ROS target workspace using 'colcon'",
       "type": "shell",
       "command": "colcon build --symlink-install --packages-up-to $(colcon list --base-paths $WORKSPACE/src/target --names-only) --cmake-args '-DCMAKE_BUILD_TYPE=Debug' '-DCMAKE_EXPORT_COMPILE_COMMANDS=1'",
       "group": {
@@ -18,7 +18,7 @@
     },
     {
       "label": "Build with Build Type",
-      "detail": "Builds ROS target-workspace including required dependencies using 'colcon' with given build type",
+      "detail": "Builds ROS target workspace using 'colcon' with given build type",
       "type": "shell",
       "command": "colcon build --symlink-install --packages-up-to $(colcon list --base-paths $WORKSPACE/src/target --names-only) --cmake-args '-DCMAKE_BUILD_TYPE=${input:cmake_build_type}' '-DCMAKE_EXPORT_COMPILE_COMMANDS=1'",
       "group": "build",
@@ -27,7 +27,7 @@
 
     {
       "label": "Test",
-      "detail": "Runs tests in ROS target-workspace using 'colcon'",
+      "detail": "Runs tests in ROS target workspace using 'colcon'",
       "type": "shell",
       "command": "colcon test --packages-select $(colcon list --base-paths $WORKSPACE/src/target --names-only) && colcon test-result --verbose",
       "group": {
