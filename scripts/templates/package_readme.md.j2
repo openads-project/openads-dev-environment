@@ -1,9 +1,127 @@
+{%- macro render_interface_definition_table(entries) -%}
+| Type | Description |
+| --- | --- |
+{% for entry in entries %}| [`{{ entry.full_type }}`]({{ entry.rel_path }}) | {{ entry.description }} |
+{% endfor -%}
+{%- endmacro -%}
+{%- macro render_named_interface_table(label, rows) -%}
+| {{ label }} | Type | Description |
+| --- | --- | --- |
+{% for row in rows %}| `{{ row.name }}` | `{{ row.interface_type }}` | {{ row.description }} |
+{% endfor -%}
+{%- endmacro -%}
+{%- macro render_parameter_table(parameters) -%}
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+{% for parameter in parameters %}| `{{ parameter.name }}` | `{{ parameter.ros_type }}` | `{{ parameter.default }}` | {{ parameter.description }} |
+{% endfor -%}
+{%- endmacro -%}
+{%- macro render_launch_args_table(arguments) -%}
+| Argument | Default | Description |
+| --- | --- | --- |
+{% for argument in arguments %}| `{{ argument.name }}` | `{{ argument.default }}` | {{ argument.description }} |
+{% endfor -%}
+{%- endmacro -%}
+{%- macro render_node_diagram(node) -%}
+```mermaid
+flowchart LR
+    NODE("{{ node.node_name | replace('"', "'") }}")
+{% for subscriber in node.subscribers %}    S{{ loop.index0 }}:::hidden -->|{{ subscriber.name | replace('"', "'") }}| NODE
+{% endfor %}{% for service_server in node.service_servers %}    SS{{ loop.index0 }}:::hidden o--o|{{ service_server.name | replace('"', "'") }}| NODE
+{% endfor %}{% for publisher in node.publishers %}    NODE -->|{{ publisher.name | replace('"', "'") }}| P{{ loop.index0 }}:::hidden
+{% endfor %}{% for action_server in node.action_servers %}    AS{{ loop.index0 }}:::hidden o-.-o|{{ action_server.name | replace('"', "'") }}| NODE
+{% endfor %}    classDef hidden display: none;
+```
+{%- endmacro -%}
+{%- macro render_node(node) -%}
+{%- set ns = namespace(parts=[]) -%}
+{%- if node.manual_text -%}
+{%- set ns.parts = ns.parts + [node.manual_text] -%}
+{%- endif -%}
+{%- if node.subscribers or node.publishers or node.service_servers or node.action_servers -%}
+{%- set ns.parts = ns.parts + [render_node_diagram(node)] -%}
+{%- endif -%}
+{%- if node.subscribers -%}
+{%- set block -%}
+#### Subscribed Topics
+
+{{ render_named_interface_table('Topic', node.subscribers) }}
+{%- endset -%}
+{%- set ns.parts = ns.parts + [block | trim] -%}
+{%- endif -%}
+{%- if node.publishers -%}
+{%- set block -%}
+#### Published Topics
+
+{{ render_named_interface_table('Topic', node.publishers) }}
+{%- endset -%}
+{%- set ns.parts = ns.parts + [block | trim] -%}
+{%- endif -%}
+{%- if node.service_servers -%}
+{%- set block -%}
+#### Service Servers
+
+{{ render_named_interface_table('Service', node.service_servers) }}
+{%- endset -%}
+{%- set ns.parts = ns.parts + [block | trim] -%}
+{%- endif -%}
+{%- if node.action_servers -%}
+{%- set block -%}
+#### Action Servers
+
+{{ render_named_interface_table('Action', node.action_servers) }}
+{%- endset -%}
+{%- set ns.parts = ns.parts + [block | trim] -%}
+{%- endif -%}
+{%- if node.action_clients -%}
+{%- set block -%}
+#### Action Clients
+
+{{ render_named_interface_table('Action', node.action_clients) }}
+{%- endset -%}
+{%- set ns.parts = ns.parts + [block | trim] -%}
+{%- endif -%}
+{%- if node.parameters -%}
+{%- set block -%}
+#### Parameters
+
+{{ render_parameter_table(node.parameters) }}
+{%- endset -%}
+{%- set ns.parts = ns.parts + [block | trim] -%}
+{%- endif -%}
+### `{{ node.node_name }}`
+
+{{ ns.parts | join('\n\n') }}
+{%- endmacro -%}
+{%- macro render_section(section) -%}
+{%- if section.kind == 'interface_table' -%}
+{{ render_interface_definition_table(section.interface_entries) }}
+{%- elif section.kind == 'nodes' -%}
+{%- for node in section.nodes -%}
+{{ render_node(node) }}{% if not loop.last %}
+
+{% endif -%}
+{%- endfor -%}
+{%- elif section.kind == 'launch_files' -%}
+{%- set ns = namespace(parts=[]) -%}
+{%- for launch_file in section.launch_files -%}
+{%- set block -%}
+### [`{{ launch_file.name }}`]({{ launch_file.rel_path }}){% if launch_file.arguments %}
+
+{{ render_launch_args_table(launch_file.arguments) }}
+{% endif %}
+{%- endset -%}
+{%- set ns.parts = ns.parts + [block | trim] -%}
+{%- endfor -%}
+{{ ns.parts | join('\n\n') }}
+{%- endif -%}
+{%- endmacro -%}
 # `{{ package_name }}`
 
 {% if package_description %}{{ package_description }}
 
 {% endif %}{% for section in sections %}## {{ section.title }}
 
-{{ section.body }}{% if not loop.last %}
+{{ render_section(section) }}{% if not loop.last %}
 
 {% endif %}{% endfor %}

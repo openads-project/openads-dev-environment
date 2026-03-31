@@ -87,7 +87,10 @@ class RepoMetadata:
 @dataclass
 class PackageSection:
     title: str
-    body: str
+    kind: str
+    interface_entries: list = field(default_factory=list)
+    nodes: list = field(default_factory=list)
+    launch_files: list = field(default_factory=list)
 
 
 @dataclass
@@ -105,21 +108,63 @@ class PackageDocEntry:
 
 
 @dataclass
+class InterfaceTableRow:
+    name: str
+    interface_type: str
+    description: str
+
+
+@dataclass
+class InterfaceDefinitionEntry:
+    full_type: str
+    rel_path: str
+    description: str
+
+
+@dataclass
+class LaunchArgumentRow:
+    name: str
+    default: str
+    description: str
+
+
+@dataclass
+class LaunchFileTemplateContext:
+    name: str
+    rel_path: str
+    arguments: list[LaunchArgumentRow]
+
+
+@dataclass
+class NodeTemplateContext:
+    node_name: str
+    manual_text: str
+    subscribers: list[InterfaceTableRow]
+    publishers: list[InterfaceTableRow]
+    service_servers: list[InterfaceTableRow]
+    action_servers: list[InterfaceTableRow]
+    action_clients: list[InterfaceTableRow]
+    parameters: list[Parameter]
+
+
+@dataclass
 class TopLevelTemplateContext:
     title: str
     repo_name: str
     owner: str
+    owner_lower: str
+    provider: str
     pages_url: str
     repo_https_url: str
     container_image: str
-    badges_block: str
-    intro_block: str
+    intro_block: Optional[str]
     pre_quickstart_block: str
-    quickstart_body: str
-    repository_packages_lines: list[str]
-    documentation_lines: list[str]
-    licensing_body: str
-    acknowledgements_body: str
+    quickstart_body: Optional[str]
+    quickstart_package: str
+    quickstart_launch_file: str
+    repository_packages: list[PackageDocEntry]
+    licensing_extra_body: str
+    acknowledgements_body: Optional[str]
 
 
 # ---------------------------------------------------------------------------
@@ -549,186 +594,151 @@ def render_manual_cell(
     return render_table_cell(manual_descriptions.get(fallback_manual_key(table_kind, row_cells), ''))
 
 
-def md_topic_table(
+def build_interface_rows(
     interfaces: list,
+    type_attr: str,
     manual_descriptions: dict[tuple, str],
     heading_path: tuple[str, ...],
-) -> str:
-    rows = ['| Topic | Type | Description |', '| --- | --- | --- |']
-    rows += [
-        f'| `{i.name}` | `{i.msg_type}` | '
-        f'{render_manual_cell(manual_descriptions, heading_path, "topic", [f"`{i.name}`", f"`{i.msg_type}`"])} |'
+    table_kind: str,
+) -> list[InterfaceTableRow]:
+    return [
+        InterfaceTableRow(
+            name=i.name,
+            interface_type=getattr(i, type_attr),
+            description=render_manual_cell(
+                manual_descriptions,
+                heading_path,
+                table_kind,
+                [f"`{i.name}`", f"`{getattr(i, type_attr)}`"],
+            ),
+        )
         for i in interfaces
     ]
-    return '\n'.join(rows)
 
 
-def md_action_table(
-    interfaces: list,
-    manual_descriptions: dict[tuple, str],
-    heading_path: tuple[str, ...],
-) -> str:
-    rows = ['| Action | Type | Description |', '| --- | --- | --- |']
-    rows += [
-        f'| `{i.name}` | `{i.action_type}` | '
-        f'{render_manual_cell(manual_descriptions, heading_path, "action", [f"`{i.name}`", f"`{i.action_type}`"])} |'
-        for i in interfaces
-    ]
-    return '\n'.join(rows)
-
-
-def md_service_table(
-    interfaces: list,
-    manual_descriptions: dict[tuple, str],
-    heading_path: tuple[str, ...],
-) -> str:
-    rows = ['| Service | Type | Description |', '| --- | --- | --- |']
-    rows += [
-        f'| `{i.name}` | `{i.srv_type}` | '
-        f'{render_manual_cell(manual_descriptions, heading_path, "service", [f"`{i.name}`", f"`{i.srv_type}`"])} |'
-        for i in interfaces
-    ]
-    return '\n'.join(rows)
-
-
-def md_launch_args_table(
+def build_launch_argument_rows(
     args: list,
     manual_descriptions: dict[tuple, str],
     heading_path: tuple[str, ...],
-) -> str:
-    rows = ['| Argument | Default | Description |', '| --- | --- | --- |']
-    rows += [
-        f'| `{render_table_cell(name)}` | `{render_table_cell(default)}` | '
-        f'{render_manual_cell(manual_descriptions, heading_path, "launch_arg", [f"`{render_table_cell(name)}`", f"`{render_table_cell(default)}`"])} |'
-        for name, default, _description in args
-    ]
-    return '\n'.join(rows)
+) -> list[LaunchArgumentRow]:
+    rows = []
+    for name, default, _description in args:
+        name_cell = render_table_cell(name)
+        default_cell = render_table_cell(default)
+        rows.append(
+            LaunchArgumentRow(
+                name=name_cell,
+                default=default_cell,
+                description=render_manual_cell(
+                    manual_descriptions,
+                    heading_path,
+                    'launch_arg',
+                    [f'`{name_cell}`', f'`{default_cell}`'],
+                ),
+            )
+        )
+    return rows
 
-def md_interface_table(
+
+def build_interface_definition_entries(
     entries: list,
     manual_descriptions: dict[tuple, str],
     heading_path: tuple[str, ...],
-) -> str:
-    rows = ['| Type | Description |', '| --- | --- |']
-    rows += [
-        f'| [`{full_type}`]({rel_path}) | '
-        f'{render_manual_cell(manual_descriptions, heading_path, "interface", [f"[`{full_type}`]({rel_path})"])} |'
+) -> list[InterfaceDefinitionEntry]:
+    return [
+        InterfaceDefinitionEntry(
+            full_type=full_type,
+            rel_path=rel_path.as_posix(),
+            description=render_manual_cell(
+                manual_descriptions,
+                heading_path,
+                'interface',
+                [f'[`{full_type}`]({rel_path.as_posix()})'],
+            ),
+        )
         for full_type, rel_path in entries
     ]
-    return '\n'.join(rows)
 
 
-def render_launch_files(
+def build_parameter_rows(params: list[Parameter]) -> list[Parameter]:
+    return [
+        Parameter(
+            name=render_table_cell(param.name),
+            ros_type=render_table_cell(param.ros_type),
+            default=render_table_cell(param.default),
+            description=render_table_cell(param.description),
+        )
+        for param in params
+    ]
+
+
+def build_launch_file_contexts(
     launch_files: list,
     doc_root: Path,
     manual_descriptions: dict[tuple, str],
-) -> str:
-    parts = []
-    for f in launch_files:
-        rel_path = f.relative_to(doc_root)
-        section = [f'### [`{f.name}`]({rel_path})']
-        args = extract_launch_arguments(f)
-        if args:
-            section += [
-                '',
-                md_launch_args_table(
-                    args,
+) -> list[LaunchFileTemplateContext]:
+    contexts = []
+    for launch_file in launch_files:
+        rel_path = launch_file.relative_to(doc_root).as_posix()
+        contexts.append(
+            LaunchFileTemplateContext(
+                name=launch_file.name,
+                rel_path=rel_path,
+                arguments=build_launch_argument_rows(
+                    extract_launch_arguments(launch_file),
                     manual_descriptions,
-                    ('Launch Files', f'[`{f.name}`]({rel_path})'),
+                    ('Launch Files', f'[`{launch_file.name}`]({rel_path})'),
                 ),
-            ]
-        parts.append('\n'.join(section))
-    return '\n\n'.join(parts)
-
-def md_parameter_table(params: list) -> str:
-    rows = ['| Parameter | Type | Default | Description |', '| --- | --- | --- | --- |']
-    rows += [
-        f'| `{render_table_cell(p.name)}` | `{render_table_cell(p.ros_type)}` | '
-        f'`{render_table_cell(p.default)}` | {render_table_cell(p.description)} |'
-        for p in params
-    ]
-    return '\n'.join(rows)
+            )
+        )
+    return contexts
 
 
-def render_node_diagram(node: NodeInterfaces) -> str:
-    """Return a Mermaid flowchart showing the node's pub/sub/action interfaces."""
-    def q(s: str) -> str:
-        return s.replace('"', "'")
-
-    lines = ['```mermaid', 'flowchart LR']
-    lines.append(f'    NODE("{q(node.node_name)}")')
-    for i, s in enumerate(node.subscribers):
-        lines.append(f'    S{i}:::hidden -->|{q(s.name)}| NODE')
-    for i, ss in enumerate(node.service_servers):
-        lines.append(f'    SS{i}:::hidden o--o|{q(ss.name)}| NODE')
-    for i, p in enumerate(node.publishers):
-        lines.append(f'    NODE -->|{q(p.name)}| P{i}:::hidden')
-    for i, a in enumerate(node.action_servers):
-        lines.append(f'    AS{i}:::hidden o-.-o|{q(a.name)}| NODE')
-    lines.append('    classDef hidden display: none;')
-    lines.append('```')
-    return '\n'.join(lines)
-
-
-def render_node(
+def build_node_context(
     node: NodeInterfaces,
     manual_descriptions: dict[tuple, str],
     manual_node_texts: dict[str, str],
-) -> str:
-    parts = [f'### `{node.node_name}`']
-    manual_node_text = manual_node_texts.get(node.node_name, '')
-    if manual_node_text:
-        parts += ['', manual_node_text]
-    if node.subscribers or node.publishers or node.service_servers or node.action_servers:
-        parts += ['', render_node_diagram(node)]
-    if node.subscribers:
-        parts += [
-            '\n#### Subscribed Topics\n',
-            md_topic_table(
-                node.subscribers,
-                manual_descriptions,
-                ('Nodes', f'`{node.node_name}`', 'Subscribed Topics'),
-            ),
-        ]
-    if node.publishers:
-        parts += [
-            '\n#### Published Topics\n',
-            md_topic_table(
-                node.publishers,
-                manual_descriptions,
-                ('Nodes', f'`{node.node_name}`', 'Published Topics'),
-            ),
-        ]
-    if node.service_servers:
-        parts += [
-            '\n#### Service Servers\n',
-            md_service_table(
-                node.service_servers,
-                manual_descriptions,
-                ('Nodes', f'`{node.node_name}`', 'Service Servers'),
-            ),
-        ]
-    if node.action_servers:
-        parts += [
-            '\n#### Action Servers\n',
-            md_action_table(
-                node.action_servers,
-                manual_descriptions,
-                ('Nodes', f'`{node.node_name}`', 'Action Servers'),
-            ),
-        ]
-    if node.action_clients:
-        parts += [
-            '\n#### Action Clients\n',
-            md_action_table(
-                node.action_clients,
-                manual_descriptions,
-                ('Nodes', f'`{node.node_name}`', 'Action Clients'),
-            ),
-        ]
-    if node.parameters:
-        parts += ['\n#### Parameters\n', md_parameter_table(node.parameters)]
-    return '\n'.join(parts)
+) -> NodeTemplateContext:
+    return NodeTemplateContext(
+        node_name=node.node_name,
+        manual_text=manual_node_texts.get(node.node_name, ''),
+        subscribers=build_interface_rows(
+            node.subscribers,
+            'msg_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Subscribed Topics'),
+            'topic',
+        ),
+        publishers=build_interface_rows(
+            node.publishers,
+            'msg_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Published Topics'),
+            'topic',
+        ),
+        service_servers=build_interface_rows(
+            node.service_servers,
+            'srv_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Service Servers'),
+            'service',
+        ),
+        action_servers=build_interface_rows(
+            node.action_servers,
+            'action_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Action Servers'),
+            'action',
+        ),
+        action_clients=build_interface_rows(
+            node.action_clients,
+            'action_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Action Clients'),
+            'action',
+        ),
+        parameters=build_parameter_rows(node.parameters),
+    )
 
 def print_diff(old: str, new: str, path: Path) -> None:
     """Print a colored unified diff of old vs new to stderr."""
@@ -787,34 +797,7 @@ def render_package_readme(
 # Top-level README rendering
 # ---------------------------------------------------------------------------
 
-INTRO_PLACEHOLDER = (
-    '**TODO: Repository tagline/description**\n\n'
-    'TODO: High-level repository introduction paragraph'
-)
-
 PRE_QUICKSTART_PLACEHOLDER = ''
-
-ACK_PLACEHOLDER = (
-    'Development and maintenance of this repository are supported by the following '
-    'projects. We acknowledge the funding of the respective institutions.\n\n'
-    '| Project | Funding Institution | Grant Number |\n'
-    '| --- | --- | --- |\n'
-    '| TODO | TODO | TODO |\n\n'
-    '<p>\n'
-    '  <img src="https://www.drought.uni-freiburg.de/stressres/images/bmftr-logo/image" height=70>\n'
-    '  <img src="https://ec.europa.eu/regional_policy/images/information-sources/logo-download-center/eu_funded_en.jpg" height=70>\n'
-    '</p>\n\n'
-    '<sup><sup>Funded by the European Union. Views and opinions expressed are however '
-    'those of the author(s) only and do not necessarily reflect those of the European '
-    'Union or the European Climate, Infrastructure and Environment Executive Agency '
-    '(CINEA). Neither the European Union nor CINEA can be held responsible for them.'    '</sup></sup>'
-)
-
-LICENSE_BODY = (
-    'The source code in this repository is licensed under Apache-2.0, '
-    'see [LICENSE](LICENSE). Container images provided by this repository '
-    'may contain third-party software shipped with their own license terms.'
-)
 
 
 def trim_blank_lines(lines: list[str]) -> list[str]:
@@ -904,8 +887,8 @@ def parse_repo_remote(remote: str) -> RepoMetadata:
 
 
 
-def extract_intro_block(readme_text: str) -> str:
-    """Return repo-specific intro block (headline + paragraph) or placeholder."""
+def extract_intro_block(readme_text: str) -> Optional[str]:
+    """Return repo-specific intro block (headline + paragraph), if present."""
     m = re.search(
         r'^#\s+.+?\n\n(?:(?:<p align="center">\n.*?\n</p>|<table align="center">\n.*?\n</table>)\n\n)?(.*?)(?=\n<p align="center">\n  <strong>🚀|\n> \[!IMPORTANT\]|\n##[^\n]*Quick Start|\Z)',
         readme_text,
@@ -913,7 +896,7 @@ def extract_intro_block(readme_text: str) -> str:
     )
     if m and m.group(1).strip():
         return m.group(1).strip()
-    return INTRO_PLACEHOLDER
+    return None
 
 
 def extract_h2_section_body(readme_text: str, section_title: str) -> Optional[str]:
@@ -940,80 +923,47 @@ def extract_pre_quickstart_block(readme_text: str) -> str:
     return PRE_QUICKSTART_PLACEHOLDER
 
 
-def build_quickstart_example(
-    container_image: str,
-    quickstart_package: str,
-    quickstart_launch_file: str,
-) -> str:
-    """Return the default Quick Start content for the top-level README."""
-    return (
-        '1. Start a container of the pre-built runtime image.\n'
-        '    ```bash\n'
-        f'    docker run --rm -it {container_image} bash\n'
-        '    ```\n'
-        '1. Inside the container, launch the pre-built nodes.\n'
-        '    ```bash\n'
-        f'    ros2 launch {quickstart_package} {quickstart_launch_file}\n'
-        '    ```\n\n'
-        '<!-- TODO: replace default quick start with repo-specific demo (Docker Compose)\n\n'
-        '1. Launch a container of the pre-built runtime image in the provided demo [Docker Compose](demo/docker-compose.yml) setup.\n'
-        '    ```bash\n'
-        '    cd demo\n'
-        '    xhost +local: # allow GUI forwarding from containers\n'
-        '    docker compose up\n'
-        '    ```\n'
-        '1. Observe ...\n'
-        '1. Stop the demo and clean up.\n'
-        '    > *Ctrl+C*\n'
-        '    ```bash\n'
-        '    docker compose down\n'
-        '    xhost -local: # revoke GUI forwarding permissions\n'
-        '    ```\n'
-        '-->'
-    )
-
-
-
-
 def extract_quickstart_body(
     readme_text: str,
-    container_image: str,
-    quickstart_package: str,
-    quickstart_launch_file: str,
-) -> str:
-    """Return repo-specific Quick Start body or the default generated content."""
+) -> Optional[str]:
+    """Return repo-specific Quick Start body, if present."""
     body = extract_h2_section_body(readme_text, 'Quick Start')
     if body:
         return body
-    return build_quickstart_example(container_image, quickstart_package, quickstart_launch_file)
+    return None
 
 
-def extract_acknowledgements_body(readme_text: str) -> str:
-    """Return repo-specific acknowledgements body or the structured default."""
+def extract_acknowledgements_body(readme_text: str) -> Optional[str]:
+    """Return repo-specific acknowledgements body, if present."""
     body = extract_h2_section_body(readme_text, 'Acknowledgements')
     if body:
         return body
-    return ACK_PLACEHOLDER
+    return None
 
 
 
 
-def extract_licensing_body(readme_text: str) -> str:
-    """Return the fixed licensing body plus any repo-specific extensions."""
+def extract_licensing_extra_body(readme_text: str) -> str:
+    """Return repo-specific Licensing content beyond the fixed default body."""
+    license_body = (
+        'The source code in this repository is licensed under Apache-2.0, '
+        'see [LICENSE](LICENSE). Container images provided by this repository '
+        'may contain third-party software shipped with their own license terms.'
+    )
     body = extract_h2_section_body(readme_text, 'Licensing')
     if not body:
-        return LICENSE_BODY
+        return ''
 
-    if body.strip() == LICENSE_BODY:
-        return LICENSE_BODY
+    if body.strip() == license_body:
+        return ''
 
-    if body.startswith(LICENSE_BODY):
-        extra_lines = trim_blank_lines(body[len(LICENSE_BODY):].splitlines())
+    if body.startswith(license_body):
+        extra_lines = trim_blank_lines(body[len(license_body):].splitlines())
         if extra_lines:
-            return LICENSE_BODY + '\n\n' + '\n'.join(extra_lines)
-        return LICENSE_BODY
+            return '\n'.join(extra_lines)
+        return ''
 
-    return LICENSE_BODY + '\n\n' + body
+    return body
 
 
 def extract_repository_package_purposes(readme_text: str) -> dict[str, str]:
@@ -1043,25 +993,11 @@ def extract_repository_package_purposes(readme_text: str) -> dict[str, str]:
     return purposes
 
 
-def render_badges(meta: RepoMetadata) -> str:
-    lines = ['<p align="center">']
-    if meta.provider == 'github' and meta.owner_lower == 'openads-project':
-        lines.append('  <a href="https://github.com/openads-project"><img src="https://img.shields.io/badge/OpenADS-f5ff01"/></a>')
-    lines.append('  <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>')
-    if meta.provider == 'github':
-        lines.extend([
-            f'  <a href="{meta.repo_https_url}/releases/latest"><img src="https://img.shields.io/github/v/release/{meta.owner}/{meta.repo}"/></a>',
-            f'  <a href="{meta.repo_https_url}/blob/main/LICENSE"><img src="https://img.shields.io/github/license/{meta.owner}/{meta.repo}"/></a>',
-            '  <br>',
-            f'  <a href="{meta.repo_https_url}/actions/workflows/docker-ros.yml"><img src="{meta.repo_https_url}/actions/workflows/docker-ros.yml/badge.svg"/></a>',
-            f'  <a href="{meta.pages_url}"><img src="{meta.repo_https_url}/actions/workflows/docs.yml/badge.svg"/></a>',
-            f'  <a href="{meta.repo_https_url}/actions/workflows/consistency.yml"><img src="{meta.repo_https_url}/actions/workflows/consistency.yml/badge.svg"/></a>',
-        ])
-    lines.append('</p>')
-    return '\n'.join(lines)
-
-
-def build_package_doc_entries(repo_root: Path, packages: list) -> list[PackageDocEntry]:
+def build_package_doc_entries(
+    repo_root: Path,
+    packages: list,
+    manual_purposes: dict[str, str],
+) -> list[PackageDocEntry]:
     entries = []
     for pkg_name, pkg_dir, pkg_description in sorted(packages, key=lambda p: p[0]):
         rel_readme = (pkg_dir / 'README.md').relative_to(repo_root).as_posix()
@@ -1069,36 +1005,10 @@ def build_package_doc_entries(repo_root: Path, packages: list) -> list[PackageDo
             PackageDocEntry(
                 name=pkg_name,
                 path=rel_readme,
-                description=pkg_description,
+                description=manual_purposes.get(rel_readme, pkg_description or 'TODO: Describe the package purpose.'),
             )
         )
     return entries
-
-
-def build_repository_package_lines(
-    package_doc_entries: list[PackageDocEntry],
-    manual_purposes: dict[str, str],
-) -> list[str]:
-    lines = [
-        '| Package | Description |',
-        '| --- | --- |',
-    ]
-    for entry in package_doc_entries:
-        description = manual_purposes.get(entry.path)
-        if description is None:
-            description = entry.description or 'TODO: Describe the package purpose.'
-        lines.append(f'| [{entry.name}]({entry.path}) | {description} |')
-    return lines
-
-
-def build_documentation_lines(repo_root: Path, pages_url: str) -> list[str]:
-    lines = []
-    if pages_url:
-        lines.append(
-            'Package and node interfaces are documented in the respective package READMEs listed below. '
-            f'Implementation details are found in the [Source Code Documentation]({pages_url}).\n'
-        )
-    return lines
 
 
 def pick_quickstart_target(packages: list) -> tuple[str, str]:
@@ -1122,34 +1032,30 @@ def render_top_level_readme(
     pre_quickstart_block = extract_pre_quickstart_block(existing_readme)
     ack_body = extract_acknowledgements_body(existing_readme)
     quickstart_pkg, quickstart_launch_file = pick_quickstart_target(packages)
-    quickstart_body = extract_quickstart_body(
-        existing_readme,
-        meta.container_image,
-        quickstart_pkg,
-        quickstart_launch_file,
-    )
-    package_doc_entries = build_package_doc_entries(repo_root, packages)
     repository_package_purposes = extract_repository_package_purposes(existing_readme)
-    repository_packages_lines = build_repository_package_lines(
-        package_doc_entries,
+    quickstart_body = extract_quickstart_body(existing_readme)
+    package_doc_entries = build_package_doc_entries(
+        repo_root,
+        packages,
         repository_package_purposes,
     )
-    documentation_lines = build_documentation_lines(repo_root, meta.pages_url)
-    licensing_body = extract_licensing_body(existing_readme)
+    licensing_extra_body = extract_licensing_extra_body(existing_readme)
     context = TopLevelTemplateContext(
         title=meta.repo,
         repo_name=meta.repo,
         owner=meta.owner,
+        owner_lower=meta.owner_lower,
+        provider=meta.provider,
         pages_url=meta.pages_url,
         repo_https_url=meta.repo_https_url,
         container_image=meta.container_image,
-        badges_block=render_badges(meta),
         intro_block=intro_block,
         pre_quickstart_block=pre_quickstart_block,
         quickstart_body=quickstart_body,
-        repository_packages_lines=repository_packages_lines,
-        documentation_lines=documentation_lines,
-        licensing_body=licensing_body,
+        quickstart_package=quickstart_pkg,
+        quickstart_launch_file=quickstart_launch_file,
+        repository_packages=package_doc_entries,
+        licensing_extra_body=licensing_extra_body,
         acknowledgements_body=ack_body,
     )
     rendered = render_template(
@@ -1195,19 +1101,34 @@ def main():
             entries = [(f'{pkg_name}/msg/{f.stem}', f.relative_to(pkg_dir)) for f in msgs]
             sections.append(PackageSection(
                 title='Messages',
-                body=md_interface_table(entries, manual_descriptions, ('Messages',)),
+                kind='interface_table',
+                interface_entries=build_interface_definition_entries(
+                    entries,
+                    manual_descriptions,
+                    ('Messages',),
+                ),
             ))
         if srvs:
             entries = [(f'{pkg_name}/srv/{f.stem}', f.relative_to(pkg_dir)) for f in srvs]
             sections.append(PackageSection(
                 title='Services',
-                body=md_interface_table(entries, manual_descriptions, ('Services',)),
+                kind='interface_table',
+                interface_entries=build_interface_definition_entries(
+                    entries,
+                    manual_descriptions,
+                    ('Services',),
+                ),
             ))
         if actions:
             entries = [(f'{pkg_name}/action/{f.stem}', f.relative_to(pkg_dir)) for f in actions]
             sections.append(PackageSection(
                 title='Actions',
-                body=md_interface_table(entries, manual_descriptions, ('Actions',)),
+                kind='interface_table',
+                interface_entries=build_interface_definition_entries(
+                    entries,
+                    manual_descriptions,
+                    ('Actions',),
+                ),
             ))
 
         if node_sources or launch_files:
@@ -1229,18 +1150,27 @@ def main():
                 nodes.append(node)
 
             if nodes:
-                node_parts = []
-                for idx, node in enumerate(nodes):
-                    if idx > 0:
-                        node_parts.append('')
-                    node_parts.append(render_node(node, manual_descriptions, manual_node_texts))
-                sections.append(PackageSection(title='Nodes', body='\n'.join(node_parts)))
+                sections.append(
+                    PackageSection(
+                        title='Nodes',
+                        kind='nodes',
+                        nodes=[
+                            build_node_context(node, manual_descriptions, manual_node_texts)
+                            for node in nodes
+                        ],
+                    )
+                )
 
             if launch_files:
                 sections.append(
                     PackageSection(
                         title='Launch Files',
-                        body=render_launch_files(launch_files, pkg_dir, manual_descriptions),
+                        kind='launch_files',
+                        launch_files=build_launch_file_contexts(
+                            launch_files,
+                            pkg_dir,
+                            manual_descriptions,
+                        ),
                     )
                 )
 
