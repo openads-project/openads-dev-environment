@@ -132,6 +132,7 @@ MANUAL_TABLE_HEADERS = {
     '| Action | Type | Description |': 'action',
     '| Service | Type | Description |': 'service',
     '| Type | Description |': 'interface',
+    '| Argument | Default | Description |': 'launch_arg',
 }
 
 def cpp_ros_type(cpp_type: str, type_aliases: dict) -> str:
@@ -574,14 +575,18 @@ def md_service_table(
     return '\n'.join(rows)
 
 
-def md_launch_args_table(args: list) -> str:
+def md_launch_args_table(
+    args: list,
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+) -> str:
     rows = ['| Argument | Default | Description |', '| --- | --- | --- |']
     rows += [
-        f'| `{render_table_cell(name)}` | `{render_table_cell(default)}` | {render_table_cell(description)} |'
-        for name, default, description in args
+        f'| `{render_table_cell(name)}` | `{render_table_cell(default)}` | '
+        f'{render_manual_cell(manual_descriptions, heading_path, "launch_arg", [f"`{render_table_cell(name)}`", f"`{render_table_cell(default)}`"])} |'
+        for name, default, _description in args
     ]
     return '\n'.join(rows)
-
 
 def md_interface_table(
     entries: list,
@@ -597,16 +602,27 @@ def md_interface_table(
     return '\n'.join(rows)
 
 
-def render_launch_files(launch_files: list, doc_root: Path) -> str:
+def render_launch_files(
+    launch_files: list,
+    doc_root: Path,
+    manual_descriptions: dict[tuple, str],
+) -> str:
     parts = []
     for f in launch_files:
-        section = [f'### [`{f.name}`]({f.relative_to(doc_root)})']
+        rel_path = f.relative_to(doc_root)
+        section = [f'### [`{f.name}`]({rel_path})']
         args = extract_launch_arguments(f)
         if args:
-            section += ['', md_launch_args_table(args)]
+            section += [
+                '',
+                md_launch_args_table(
+                    args,
+                    manual_descriptions,
+                    ('Launch Files', f'[`{f.name}`]({rel_path})'),
+                ),
+            ]
         parts.append('\n'.join(section))
     return '\n\n'.join(parts)
-
 
 def md_parameter_table(params: list) -> str:
     rows = ['| Parameter | Type | Default | Description |', '| --- | --- | --- | --- |']
@@ -760,7 +776,7 @@ INTRO_PLACEHOLDER = (
     'TODO: High-level repository introduction paragraph'
 )
 
-PRE_QUICKSTART_PLACEHOLDER = '<!-- <img src="TODO: teaser image/gif" width=800> -->'
+PRE_QUICKSTART_PLACEHOLDER = ''
 
 ACK_PLACEHOLDER = (
     'Development and maintenance of this repository are supported by the following '
@@ -875,7 +891,7 @@ def parse_repo_remote(remote: str) -> RepoMetadata:
 def extract_intro_block(readme_text: str) -> str:
     """Return repo-specific intro block (headline + paragraph) or placeholder."""
     m = re.search(
-        r'^#\s+.+?\n\n(?:<p align="center">\n.*?\n</p>\n\n)?(.*?)(?=\n<p align="center">\n  <strong>🚀|\n> \[!IMPORTANT\]|\n##[^\n]*Quick Start|\Z)',
+        r'^#\s+.+?\n\n(?:(?:<p align="center">\n.*?\n</p>|<table align="center">\n.*?\n</table>)\n\n)?(.*?)(?=\n<p align="center">\n  <strong>🚀|\n> \[!IMPORTANT\]|\n##[^\n]*Quick Start|\Z)',
         readme_text,
         re.DOTALL | re.MULTILINE,
     )
@@ -1029,6 +1045,16 @@ def render_badges(meta: RepoMetadata) -> str:
     return '\n'.join(lines)
 
 
+def find_logo_path(repo_root: Path) -> str:
+    assets_dir = repo_root / "assets"
+    if not assets_dir.is_dir():
+        return ""
+    matches = sorted(path for path in assets_dir.glob("logo.*") if path.is_file())
+    if not matches:
+        return ""
+    return f"./{matches[0].relative_to(repo_root).as_posix()}"
+
+
 def build_package_doc_entries(repo_root: Path, packages: list) -> list[PackageDocEntry]:
     entries = []
     for pkg_name, pkg_dir, pkg_description in sorted(packages, key=lambda p: p[0]):
@@ -1103,7 +1129,7 @@ def render_top_level_readme(
         repository_package_purposes,
     )
     documentation_lines = build_documentation_lines(repo_root, meta.pages_url)
-    logo_path = './assets/logo.png' if (repo_root / 'assets' / 'logo.png').exists() else ''
+    logo_path = find_logo_path(repo_root)
     licensing_body = extract_licensing_body(existing_readme)
     context = TopLevelTemplateContext(
         title=meta.repo,
@@ -1208,7 +1234,10 @@ def main():
 
             if launch_files:
                 sections.append(
-                    PackageSection(title='Launch Files', body=render_launch_files(launch_files, pkg_dir))
+                    PackageSection(
+                        title='Launch Files',
+                        body=render_launch_files(launch_files, pkg_dir, manual_descriptions),
+                    )
                 )
 
         new_content = render_package_readme(
