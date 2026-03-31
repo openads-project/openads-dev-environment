@@ -146,7 +146,7 @@ def cpp_param_type(cpp_type: str) -> str:
     t = cpp_type.strip()
     if t in ('double', 'float'):
         return 'float'
-    if t == 'int':
+    if t in ('int', 'long', 'long int', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t'):
         return 'int'
     if t == 'bool':
         return 'bool'
@@ -157,7 +157,7 @@ def cpp_param_type(cpp_type: str) -> str:
         element_type = vector_match.group(1).strip()
         if element_type in ('double', 'float'):
             return 'float[]'
-        if element_type in ('int', 'long', 'long int', 'int64_t', 'uint64_t'):
+        if element_type in ('int', 'long', 'long int', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t'):
             return 'int[]'
         if element_type == 'bool':
             return 'bool[]'
@@ -167,11 +167,13 @@ def cpp_param_type(cpp_type: str) -> str:
     return t
 
 
-def format_default(default_str: Optional[str], cpp_type: str) -> str:
+def format_default(default_str: Optional[str], cpp_type: str, enum_value_map: dict[str, str]) -> str:
     """Format a C++ default value for Markdown display."""
     if default_str is None:
         return '[]' if 'vector' in cpp_type else ''
     formatted = default_str.strip()
+    if formatted in enum_value_map:
+        return enum_value_map[formatted]
     if 'vector' in cpp_type and formatted.startswith('{') and formatted.endswith('}'):
         return f'[{formatted[1:-1].strip()}]'
     return formatted
@@ -358,7 +360,7 @@ def extract_launch_arguments(path: Path) -> list:
 def build_member_var_map(headers: list) -> dict:
     """Return {var_name: (cpp_type, default_str)} from member variable declarations."""
     pattern = re.compile(
-        r'\b(double|float|int|bool|std::string|std::vector\s*<[^>]+>)\s+(\w+_)\s*'
+        r'\b(double|float|int|long|long\s+int|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|bool|std::string|std::vector\s*<[^>]+>)\s+(\w+_)\s*'
         r'(?:=\s*([^;]+))?;'
     )
     result = {}
@@ -367,6 +369,21 @@ def build_member_var_map(headers: list) -> dict:
             var_name = m.group(2).strip()
             if var_name not in result:
                 result[var_name] = (m.group(1).strip(), m.group(3))
+    return result
+
+
+def build_enum_value_map(headers: list) -> dict[str, str]:
+    """Return {'ENUM::MEMBER': 'value'} for simple enum definitions in headers."""
+    enum_pattern = re.compile(r'enum\s+(\w+)\s*\{(.*?)\};', re.DOTALL)
+    entry_pattern = re.compile(r'(\w+)\s*=\s*(-?\d+)')
+    result = {}
+    for header in headers:
+        source = header.read_text(errors='replace')
+        for enum_match in enum_pattern.finditer(source):
+            enum_name = enum_match.group(1)
+            body = enum_match.group(2)
+            for entry_match in entry_pattern.finditer(body):
+                result[f'{enum_name}::{entry_match.group(1)}'] = entry_match.group(2)
     return result
 
 
@@ -380,14 +397,14 @@ def build_type_alias_map(headers: list) -> dict:
     return result
 
 
-def resolve_parameters(raw_params: list, member_var_map: dict) -> list:
+def resolve_parameters(raw_params: list, member_var_map: dict, enum_value_map: dict[str, str]) -> list:
     params = []
     for name, member_var, description in raw_params:
         cpp_type, default_raw = member_var_map.get(member_var, ('', None))
         params.append(Parameter(
             name=name,
             ros_type=cpp_param_type(cpp_type),
-            default=format_default(default_raw, cpp_type),
+            default=format_default(default_raw, cpp_type, enum_value_map),
             description=description,
         ))
     return params
@@ -1207,7 +1224,7 @@ def main():
                     service_servers=extract_service_servers(source, type_aliases),
                     action_servers=extract_action_servers(source, type_aliases),
                     action_clients=extract_action_clients(source, type_aliases),
-                    parameters=resolve_parameters(extract_raw_parameters(source), member_var_map),
+                    parameters=resolve_parameters(extract_raw_parameters(source), member_var_map, build_enum_value_map(headers)),
                 )
                 nodes.append(node)
 
