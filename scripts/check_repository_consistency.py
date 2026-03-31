@@ -12,8 +12,10 @@ import argparse
 import difflib
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,7 +39,7 @@ class CheckContext:
 CheckFn = Callable[[CheckContext], CheckResult]
 
 
-CPP_EXTENSIONS = (".hpp", ".h", ".cpp", ".cc", ".cxx")
+CPP_EXTENSIONS = (".hpp", ".h", ".hh", ".hxx", ".cpp", ".cc", ".cxx")
 PYTHON_EXTENSION = ".py"
 COPYRIGHT_HEADER_EXTENSIONS = (".hpp", ".cpp", ".py")
 
@@ -118,6 +120,339 @@ def git_tracked_files(repo_root: Path) -> list[Path]:
             continue
         files.append(repo_root / line.strip())
     return files
+
+
+def normalize_whitespace(text: str) -> str:
+    return " ".join(text.split())
+
+
+def collect_element_text(element: ET.Element | None) -> str:
+    if element is None:
+        return ""
+    return normalize_whitespace(" ".join(part for part in element.itertext()))
+
+
+def quote_doxygen_value(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def build_doxygen_input_value(paths: list[Path]) -> str:
+    return " \\\n".join(quote_doxygen_value(str(path)) for path in paths)
+
+
+def resolve_path_from_doxygen(repo_root: Path, raw_path: str | None) -> Path | None:
+    if not raw_path:
+        return None
+
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = repo_root / path
+
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def path_to_repo_relative_string(repo_root: Path, path: Path | None) -> str | None:
+    if path is None:
+        return None
+
+    try:
+        return path.relative_to(repo_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def path_with_line(path: str, line: str | None) -> str:
+    if not line or not line.isdigit() or int(line) <= 0:
+        return path
+    return f"{path}:{line}"
+
+
+def has_doxygen_description(member: ET.Element) -> bool:
+    return any(
+        bool(collect_element_text(member.find(tag_name)))
+        for tag_name in ("briefdescription", "detaileddescription")
+    )
+
+
+def build_doxygen_function_signature(member: ET.Element) -> str:
+    definition = normalize_whitespace(member.findtext("definition", default=""))
+    if not definition:
+        definition = normalize_whitespace(member.findtext("name", default=""))
+    args_string = normalize_whitespace(member.findtext("argsstring", default=""))
+    return f"{definition}{args_string}".strip() or "<unknown function>"
+
+
+def build_doxygen_template_signature(member: ET.Element) -> str:
+    return collect_element_text(member.find("templateparamlist"))
+
+
+def get_doxygen_member_paths(member: ET.Element, repo_root: Path) -> list[Path]:
+    location = member.find("location")
+    if location is None:
+        return []
+
+    paths: list[Path] = []
+    for attr_name in ("file", "declfile", "bodyfile"):
+        path = resolve_path_from_doxygen(repo_root, location.attrib.get(attr_name))
+        if path is None or path in paths:
+            continue
+        paths.append(path)
+    return paths
+
+
+def get_doxygen_primary_member_path(member: ET.Element, repo_root: Path) -> Path | None:
+    location = member.find("location")
+    if location is None:
+        return None
+
+    for attr_name in ("file", "declfile", "bodyfile"):
+        path = resolve_path_from_doxygen(repo_root, location.attrib.get(attr_name))
+        if path is not None:
+            return path
+    return None
+
+
+def get_doxygen_member_locations(member: ET.Element, repo_root: Path) -> list[str]:
+    location = member.find("location")
+    if location is None:
+        return []
+
+    locations: list[str] = []
+    for file_attr, line_attr in (("declfile", "declline"), ("bodyfile", "bodystart"), ("file", "line")):
+        path = resolve_path_from_doxygen(repo_root, location.attrib.get(file_attr))
+        if path is None:
+            continue
+        relative_path = path_to_repo_relative_string(repo_root, path)
+        if relative_path is None:
+            continue
+        location_text = path_with_line(relative_path, location.attrib.get(line_attr))
+        if location_text not in locations:
+            locations.append(location_text)
+    return locations
+
+
+def is_cpp_header_path(path: str) -> bool:
+    return Path(path).suffix in (".h", ".hpp", ".hh", ".hxx")
+
+
+def is_cpp_source_path(path: str) -> bool:
+    return Path(path).suffix in (".cpp", ".cc", ".cxx")
+
+
+def function_group_matches(existing_paths: set[str], new_paths: set[str]) -> bool:
+    if existing_paths.intersection(new_paths):
+        return True
+
+    existing_stems = {Path(path).stem for path in existing_paths}
+    new_stems = {Path(path).stem for path in new_paths}
+    if not existing_stems.intersection(new_stems):
+        return False
+
+    return (
+        any(is_cpp_header_path(path) for path in existing_paths)
+        and any(is_cpp_source_path(path) for path in new_paths)
+    ) or (
+        any(is_cpp_source_path(path) for path in existing_paths)
+        and any(is_cpp_header_path(path) for path in new_paths)
+    )
+
+
+def build_cpp_function_check_detail(signature: str, locations: list[str]) -> str:
+    if locations:
+        return f"{', '.join(locations)}: {signature}"
+    return signature
+
+
+def check_cpp_code_has_doxygen_docs(ctx: CheckContext) -> CheckResult:
+    try:
+        tracked_files = git_tracked_files(ctx.repo_root)
+    except RuntimeError as err:
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=False,
+            message="Failed to list tracked files from git",
+            details=[str(err)],
+        )
+
+    tracked_cpp_files = sorted(
+        path.resolve() for path in tracked_files if path.suffix in CPP_EXTENSIONS and path.is_file()
+    )
+    if not tracked_cpp_files:
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=True,
+            message="No tracked C++ files found",
+            details=[],
+        )
+
+    doxygen_executable = shutil.which("doxygen")
+    if doxygen_executable is None:
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=False,
+            message='Required "doxygen" executable was not found in PATH',
+            details=["Install Doxygen or run this check in CI where the consistency workflow installs it."],
+        )
+
+    base_doxyfile = Path(__file__).resolve().parents[1] / "Doxyfile"
+    if not base_doxyfile.is_file():
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=False,
+            message="Shared Doxygen base configuration file is missing",
+            details=[str(base_doxyfile)],
+        )
+
+    tracked_cpp_file_set = set(tracked_cpp_files)
+    with tempfile.TemporaryDirectory(prefix="consistency-doxygen-") as tmp_dir_str:
+        tmp_dir = Path(tmp_dir_str)
+        output_dir = tmp_dir / "out"
+        temp_doxyfile = tmp_dir / "Doxyfile"
+
+        temp_doxyfile.write_text(
+            read_text(base_doxyfile).rstrip()
+            + "\n\n"
+            + "# Overrides for repository consistency check\n"
+            + f"INPUT = {build_doxygen_input_value(tracked_cpp_files)}\n"
+            + f"OUTPUT_DIRECTORY = {quote_doxygen_value(str(output_dir))}\n"
+            + "RECURSIVE = NO\n"
+            + "GENERATE_HTML = NO\n"
+            + "GENERATE_XML = YES\n"
+            + "XML_OUTPUT = xml\n"
+            + "EXTRACT_ALL = YES\n"
+            + "EXTRACT_PRIVATE = YES\n",
+            encoding="utf-8",
+        )
+
+        doxygen_result = run_command([doxygen_executable, str(temp_doxyfile)], cwd=ctx.repo_root)
+        if doxygen_result.returncode != 0:
+            details = []
+            if doxygen_result.stdout.strip():
+                details.append("stdout:\n" + doxygen_result.stdout.strip())
+            if doxygen_result.stderr.strip():
+                details.append("stderr:\n" + doxygen_result.stderr.strip())
+            if not details:
+                details.append("Doxygen exited with a non-zero status without output.")
+            return CheckResult(
+                check_id="cpp_code_has_doxygen_docs",
+                name="Tracked C++ functions are documented for Doxygen",
+                passed=False,
+                message="Doxygen execution failed while checking C++ function documentation",
+                details=details,
+            )
+
+        xml_dir = output_dir / "xml"
+        if not xml_dir.is_dir():
+            return CheckResult(
+                check_id="cpp_code_has_doxygen_docs",
+                name="Tracked C++ functions are documented for Doxygen",
+                passed=False,
+                message="Doxygen did not produce the expected XML output directory",
+                details=[str(xml_dir)],
+            )
+
+        grouped_functions: dict[tuple[str, str], list[dict[str, object]]] = {}
+        for xml_file in sorted(xml_dir.glob("*.xml")):
+            if xml_file.name == "index.xml":
+                continue
+
+            root = ET.parse(xml_file).getroot()
+            for member in root.findall(".//memberdef[@kind='function']"):
+                signature = build_doxygen_function_signature(member)
+                template_signature = build_doxygen_template_signature(member)
+                primary_path = get_doxygen_primary_member_path(member, ctx.repo_root)
+                member_paths = [
+                    path for path in get_doxygen_member_paths(member, ctx.repo_root) if path in tracked_cpp_file_set
+                ]
+                if not member_paths and primary_path is not None and primary_path in tracked_cpp_file_set:
+                    member_paths = [primary_path]
+
+                primary_relative_path = path_to_repo_relative_string(ctx.repo_root, primary_path) or "<unknown file>"
+                relative_paths = {
+                    relative_path
+                    for relative_path in (
+                        path_to_repo_relative_string(ctx.repo_root, path) for path in member_paths
+                    )
+                    if relative_path is not None
+                }
+                member_locations = {
+                    location
+                    for location in get_doxygen_member_locations(member, ctx.repo_root)
+                    if Path(location.split(":", 1)[0]).suffix in CPP_EXTENSIONS
+                }
+                if not relative_paths and primary_relative_path != "<unknown file>":
+                    relative_paths.add(primary_relative_path)
+                if not member_locations and primary_relative_path != "<unknown file>":
+                    member_locations.add(primary_relative_path)
+
+                key = (signature, template_signature)
+                candidate_groups = grouped_functions.setdefault(key, [])
+                group = next(
+                    (
+                        existing_group
+                        for existing_group in candidate_groups
+                        if function_group_matches(existing_group["relative_paths"], relative_paths)
+                    ),
+                    None,
+                )
+                if group is None:
+                    group = {
+                        "signature": signature,
+                        "documented": False,
+                        "locations": set(member_locations),
+                        "relative_paths": set(relative_paths),
+                    }
+                    candidate_groups.append(group)
+
+                group["documented"] = bool(group["documented"]) or has_doxygen_description(member)
+                group["locations"].update(member_locations)
+                group["relative_paths"].update(relative_paths)
+
+        if not grouped_functions:
+            return CheckResult(
+                check_id="cpp_code_has_doxygen_docs",
+                name="Tracked C++ functions are documented for Doxygen",
+                passed=True,
+                message="No C++ functions were discovered by Doxygen in tracked files",
+                details=[],
+            )
+
+        offenders = []
+        for group_list in grouped_functions.values():
+            for group in group_list:
+                if bool(group["documented"]):
+                    continue
+                offenders.append(
+                    build_cpp_function_check_detail(
+                        str(group["signature"]),
+                        sorted(str(location) for location in group["locations"]),
+                    )
+                )
+
+    if offenders:
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=False,
+            message="Some tracked C++ functions are undocumented for Doxygen",
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="cpp_code_has_doxygen_docs",
+        name="Tracked C++ functions are documented for Doxygen",
+        passed=True,
+        message="All tracked C++ functions are documented for Doxygen",
+        details=[],
+    )
 
 
 def discover_ros_package_dirs(repo_root: Path) -> list[Path]:
@@ -1249,6 +1584,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "source_files_have_copyright_notice": (
         "Tracked .cpp/.hpp/.py files include copyright notice",
         check_source_files_have_copyright_notice,
+    ),
+    "cpp_code_has_doxygen_docs": (
+        "Tracked C++ functions are documented for Doxygen",
+        check_cpp_code_has_doxygen_docs,
     ),
     "ros_nodes_have_parameter_loader": (
         "ROS nodes define parameter loader helper",

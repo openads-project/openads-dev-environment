@@ -11,7 +11,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Install script dependencies
+      - name: Install dependencies via apt
+        run: sudo apt-get update && sudo apt-get install -y doxygen
+      - name: Install dependencies via pip
         run: python3 -m pip install -r .openads-dev-environment/scripts/requirements.txt
       - name: Run consistency checks
         run: python3 .openads-dev-environment/scripts/check_repository_consistency.py

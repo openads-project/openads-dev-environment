@@ -153,6 +153,7 @@ Use [`check_repository_consistency.py`](scripts/check_repository_consistency.py)
 
 | Name | Description |
 | --- | --- |
+| `cpp_code_has_doxygen_docs` | Passes when every tracked C++ function that Doxygen discovers has documentation on at least one emitted declaration or definition record. |
 | `demo_launch_remappable_topics_cover_node_pubsub` | Passes when each launch file in `ros2_demo_package/launch/` lists every string-literal pub/sub/service/client name used by the launched node executables in its `remappable_topics` launch arguments. If `ros2_demo_package/launch/` does not exist, the check is skipped as passing. |
 | `dev_environment_at_remote_main` | Passes when `.openads-dev-environment` is present as a git repository and its current `HEAD` exactly matches `origin/main`. Update the submodule if it points to any other commit. |
 | `generated_readmes_have_no_todo` | Passes when the repository top-level `README.md` and every generated package `README.md` contain no `TODO` placeholders. Replace all remaining placeholder text before committing. |
