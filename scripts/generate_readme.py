@@ -1096,7 +1096,7 @@ def build_documentation_lines(repo_root: Path, pages_url: str) -> list[str]:
     if pages_url:
         lines.append(
             'Package and node interfaces are documented in the respective package READMEs listed below. '
-            f'Implementation details are found in the [Source Code Documentation]({pages_url}).'
+            f'Implementation details are found in the [Source Code Documentation]({pages_url}).\n'
         )
     return lines
 
