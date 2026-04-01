@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/openads-project"><img src="https://img.shields.io/badge/OpenADS-f5ff01"/></a>
   <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>
-  <a href="https://github.com/openads-project/openads_ros2_demo_repository/blob/main/LICENSE"><img src="https://img.shields.io/github/license/openads-project/openads_ros2_demo_repository"/></a>
+  <a href="https://github.com/openads-project/openads-dev-environment/blob/main/LICENSE"><img src="https://img.shields.io/github/license/openads-project/openads-dev-environment"/></a>
 </p>
 
 This repository defines a common development environment for and enforces consistency of components of [***OpenADS***](https://github.com/openads-project), the *Open Automated Driving Stack*.
