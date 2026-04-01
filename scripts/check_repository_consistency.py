@@ -468,6 +468,29 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def get_ros_package_name(package_dir: Path) -> str | None:
+    package_xml = package_dir / "package.xml"
+    if not package_xml.is_file():
+        return None
+
+    try:
+        root = ET.fromstring(read_text(package_xml))
+    except ET.ParseError:
+        return None
+
+    name = normalize_whitespace(root.findtext("name", default=""))
+    return name or None
+
+
+def discover_ros_packages_by_name(repo_root: Path) -> dict[str, Path]:
+    packages: dict[str, Path] = {}
+    for package_dir in discover_ros_package_dirs(repo_root):
+        package_name = get_ros_package_name(package_dir)
+        if package_name:
+            packages[package_name] = package_dir
+    return packages
+
+
 def generated_readme_paths(repo_root: Path) -> list[Path]:
     paths = {repo_root / "README.md"}
     paths.update(package_dir / "README.md" for package_dir in discover_ros_package_dirs(repo_root))
@@ -751,13 +774,116 @@ def extract_remappable_topics_from_launch(launch_text: str) -> set[str]:
     return topics
 
 
+def extract_keyword_string_argument(call_args: str, keyword: str) -> str | None:
+    for arg in split_top_level_arguments(call_args):
+        if "=" not in arg:
+            continue
+        raw_key, raw_value = arg.split("=", 1)
+        if raw_key.strip() != keyword:
+            continue
+        value = raw_value.strip()
+        if not RE_PY_STRING_LITERAL.fullmatch(value):
+            return None
+        return unquote_string_literal(value)
+    return None
+
+
+def extract_launch_node_specs(launch_text: str) -> list[tuple[str, str]]:
+    node_specs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for _, node_args in find_call_args(launch_text, "Node"):
+        package_name = extract_keyword_string_argument(node_args, "package")
+        executable = extract_keyword_string_argument(node_args, "executable")
+        if package_name is None or executable is None:
+            continue
+
+        spec = (package_name, executable)
+        if spec in seen:
+            continue
+        seen.add(spec)
+        node_specs.append(spec)
+
+    return node_specs
+
+
+def discover_default_launch_files_for_package(package_dir: Path) -> list[Path]:
+    launch_dir = package_dir / "launch"
+    if not launch_dir.is_dir():
+        return []
+
+    package_name = get_ros_package_name(package_dir)
+    if not package_name:
+        return []
+
+    preferred_names = [
+        f"{package_name}_launch.py",
+        f"{package_name}.launch.py",
+    ]
+    preferred_matches = [launch_dir / name for name in preferred_names if (launch_dir / name).is_file()]
+    if preferred_matches:
+        return preferred_matches
+
+    launch_files = sorted(launch_dir.glob("*.py"))
+    if len(launch_files) == 1:
+        return launch_files
+
+    return []
+
+
 def find_node_source_files_for_executable(package_dir: Path, executable: str) -> list[Path]:
     matches: list[Path] = []
-    for extension in (".cpp", ".cc", ".cxx", ".py"):
-        candidate = package_dir / "src" / f"{executable}{extension}"
-        if candidate.is_file():
+    package_name = get_ros_package_name(package_dir)
+
+    candidate_paths = [
+        package_dir / "src" / f"{executable}.cpp",
+        package_dir / "src" / f"{executable}.cc",
+        package_dir / "src" / f"{executable}.cxx",
+        package_dir / "src" / f"{executable}.py",
+        package_dir / "scripts" / f"{executable}.py",
+    ]
+    if package_name:
+        package_module = package_name.replace("-", "_")
+        candidate_paths.extend(
+            [
+                package_dir / package_module / f"{executable}.py",
+                package_dir / package_name / f"{executable}.py",
+            ]
+        )
+
+    for candidate in candidate_paths:
+        if candidate.is_file() and candidate not in matches:
             matches.append(candidate)
     return matches
+
+
+def collect_declared_comm_names_from_source_files(source_files: list[Path]) -> set[str]:
+    cpp_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 0,
+        "create_client": 0,
+    }
+    py_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 1,
+        "create_client": 1,
+    }
+
+    declared_topics: set[str] = set()
+    for source_file in source_files:
+        text = read_text(source_file)
+        if source_file.suffix == ".py":
+            if not (RE_PY_RCLPY_HINT.search(text) and RE_PY_NODE_CLASS.search(text)):
+                continue
+            declared_topics.update(collect_literal_comm_names(text, py_call_specs, cpp=False))
+            continue
+
+        if has_cpp_node_evidence(text):
+            declared_topics.update(collect_literal_comm_names(text, cpp_call_specs, cpp=True))
+
+    return declared_topics
 
 
 def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
@@ -847,61 +973,45 @@ def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
     )
 
 
-def check_demo_launch_remappable_topics_cover_node_pubsub(ctx: CheckContext) -> CheckResult:
-    package_dir = ctx.repo_root / "ros2_demo_package"
-    launch_dir = package_dir / "launch"
+def check_default_launch_remappable_topics_cover_node_pubsub(ctx: CheckContext) -> CheckResult:
+    package_dirs = discover_ros_package_dirs(ctx.repo_root)
+    launch_files: list[Path] = []
+    for package_dir in package_dirs:
+        launch_files.extend(discover_default_launch_files_for_package(package_dir))
 
-    if not launch_dir.is_dir():
+    if not launch_files:
         return CheckResult(
-            check_id="demo_launch_remappable_topics_cover_node_pubsub",
-            name="Demo launch remappable topics cover node pub/sub topics",
+            check_id="default_launch_remappable_topics_cover_node_pubsub",
+            name="Default launch remappable topics cover node pub/sub topics",
             passed=True,
-            message="ros2_demo_package/launch not found; nothing to check",
+            message="No default ROS package launch files with remappable topic coverage to check",
             details=[],
         )
 
     failures: list[str] = []
-    cpp_call_specs = {
-        "create_publisher": 0,
-        "create_subscription": 0,
-        "create_service": 0,
-        "create_client": 0,
-    }
-    py_call_specs = {
-        "create_publisher": 0,
-        "create_subscription": 0,
-        "create_service": 1,
-        "create_client": 1,
-    }
-    launch_files = sorted(launch_dir.glob("*.py"))
-    for launch_file in launch_files:
+    packages_by_name = discover_ros_packages_by_name(ctx.repo_root)
+
+    for launch_file in sorted(set(launch_files)):
         launch_text = read_text(launch_file)
         remappable_topics = extract_remappable_topics_from_launch(launch_text)
-        executables = sorted(set(RE_LAUNCH_EXECUTABLE.findall(launch_text)))
+        node_specs = extract_launch_node_specs(launch_text)
 
-        for executable in executables:
+        for package_name, executable in node_specs:
+            package_dir = packages_by_name.get(package_name)
+            if package_dir is None:
+                continue
+
             source_files = find_node_source_files_for_executable(package_dir, executable)
             if not source_files:
                 continue
 
-            declared_topics: set[str] = set()
-            for source_file in source_files:
-                text = read_text(source_file)
-                if source_file.suffix == ".py":
-                    if not (RE_PY_RCLPY_HINT.search(text) and RE_PY_NODE_CLASS.search(text)):
-                        continue
-                    declared_topics.update(collect_literal_comm_names(text, py_call_specs, cpp=False))
-                    continue
-
-                if has_cpp_node_evidence(text):
-                    declared_topics.update(collect_literal_comm_names(text, cpp_call_specs, cpp=True))
-
+            declared_topics = collect_declared_comm_names_from_source_files(source_files)
             if not declared_topics:
                 continue
 
             if not remappable_topics:
                 failures.append(
-                    f"{launch_file.relative_to(ctx.repo_root)} ({executable}): "
+                    f"{launch_file.relative_to(ctx.repo_root)} ({package_name}/{executable}): "
                     "no remappable_topics defaults found"
                 )
                 continue
@@ -909,28 +1019,28 @@ def check_demo_launch_remappable_topics_cover_node_pubsub(ctx: CheckContext) -> 
             missing_topics = sorted(topic for topic in declared_topics if topic not in remappable_topics)
             if missing_topics:
                 failures.append(
-                    f"{launch_file.relative_to(ctx.repo_root)} ({executable}): missing "
+                    f"{launch_file.relative_to(ctx.repo_root)} ({package_name}/{executable}): missing "
                     + ", ".join(missing_topics)
                 )
 
     if failures:
         return CheckResult(
-            check_id="demo_launch_remappable_topics_cover_node_pubsub",
-            name="Demo launch remappable topics cover node pub/sub topics",
+            check_id="default_launch_remappable_topics_cover_node_pubsub",
+            name="Default launch remappable topics cover node pub/sub topics",
             passed=False,
             message=(
-                "Some ros2_demo_package node pub/sub/service names are not listed in launch "
+                "Some default launch files do not list launched node pub/sub/service names in "
                 "remappable_topics"
             ),
             details=failures,
         )
 
     return CheckResult(
-        check_id="demo_launch_remappable_topics_cover_node_pubsub",
-        name="Demo launch remappable topics cover node pub/sub topics",
+        check_id="default_launch_remappable_topics_cover_node_pubsub",
+        name="Default launch remappable topics cover node pub/sub topics",
         passed=True,
         message=(
-            "All checkable ros2_demo_package node pub/sub/service names are listed in launch "
+            "All checkable launched node pub/sub/service names are listed in default launch "
             "remappable_topics"
         ),
         details=[],
@@ -1609,9 +1719,9 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
         "ROS pub/sub topics use private namespace",
         check_ros_pubsub_topics_private_namespace,
     ),
-    "demo_launch_remappable_topics_cover_node_pubsub": (
-        "Demo launch remappable topics cover node pub/sub topics",
-        check_demo_launch_remappable_topics_cover_node_pubsub,
+    "default_launch_remappable_topics_cover_node_pubsub": (
+        "Default launch remappable topics cover node pub/sub topics",
+        check_default_launch_remappable_topics_cover_node_pubsub,
     ),
     "required_top_level_symlinks": (
         "Required top-level symlinks",
