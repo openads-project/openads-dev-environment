@@ -9,10 +9,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -35,8 +39,9 @@ class CheckContext:
 CheckFn = Callable[[CheckContext], CheckResult]
 
 
-CPP_EXTENSIONS = (".hpp", ".h", ".cpp", ".cc", ".cxx")
+CPP_EXTENSIONS = (".hpp", ".h", ".hh", ".hxx", ".cpp", ".cc", ".cxx")
 PYTHON_EXTENSION = ".py"
+COPYRIGHT_HEADER_EXTENSIONS = (".hpp", ".cpp", ".py")
 
 RE_CPP_NODE_PUBLIC = re.compile(r"public\s+rclcpp::Node")
 RE_CPP_NODE_BASE_INIT = re.compile(r":\s*Node\s*\(")
@@ -45,11 +50,33 @@ RE_CPP_DECLARE_AND_LOAD = re.compile(r"\bdeclareAndLoadParameter\b")
 RE_PY_NODE_CLASS = re.compile(r"class\s+\w+\s*\(([^)]*\bNode\b[^)]*)\)\s*:")
 RE_PY_RCLPY_HINT = re.compile(r"\brclpy\b")
 RE_PY_DECLARE_AND_LOAD = re.compile(r"def\s+declare_and_load_parameter\s*\(")
+RE_CPP_STRING_LITERAL = re.compile(r'^(?:u8|u|U|L)?"(?:\\.|[^"\\])*"$')
+RE_PY_STRING_LITERAL = re.compile(r"^[rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\")$")
+RE_CMAKE_TARGET_DECL = re.compile(r"^\s*add_(?:executable|library)\s*\(", re.MULTILINE)
+RE_COPYRIGHT_HEADER = re.compile(
+    r"Copyright\s+Institute\s+for\s+Automotive\s+Engineering\s+\(ika\),\s+RWTH\s+Aachen\s+University"
+)
+RE_APACHE_SPDX_IDENTIFIER = re.compile(r"SPDX-License-Identifier:\s*Apache-2\.0")
+RE_KEYWORD_DEFAULT_VALUE = re.compile(
+    r"default_value\s*=\s*([rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"))"
+)
+RE_LAUNCH_EXECUTABLE = re.compile(r"""executable\s*=\s*["']([^"']+)["']""")
 
 ANSI_RESET = "\033[0m"
 ANSI_GREEN = "\033[32m"
 ANSI_RED = "\033[31m"
 ANSI_YELLOW = "\033[33m"
+
+EXPECTED_CMAKE_LINT_LINES = """find_package(ament_lint_auto REQUIRED)
+  set(ament_cmake_clang_format_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../.vscode/format/.clang-format)
+  set(ament_cmake_clang_tidy_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../.vscode/lint/.clang-tidy)
+  set(ament_cmake_flake8_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../.vscode/lint/ament_flake8.ini)
+  ament_lint_auto_find_test_dependencies()"""
+
+EXPECTED_PACKAGEXML_TESTDEPENDS = """  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_cmake_clang_format</test_depend>
+  <test_depend>ament_cmake_clang_tidy</test_depend>
+  <test_depend>ament_cmake_flake8</test_depend>"""
 
 
 def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -82,6 +109,352 @@ def git_status_porcelain(repo_root: Path) -> list[str]:
     return sorted(lines)
 
 
+def git_tracked_files(repo_root: Path) -> list[Path]:
+    tracked = run_git(["ls-files"], cwd=repo_root)
+    if tracked.returncode != 0:
+        raise RuntimeError(tracked.stderr.strip() or "git ls-files failed")
+
+    files: list[Path] = []
+    for line in tracked.stdout.splitlines():
+        if not line.strip():
+            continue
+        files.append(repo_root / line.strip())
+    return files
+
+
+def normalize_whitespace(text: str) -> str:
+    return " ".join(text.split())
+
+
+def collect_element_text(element: ET.Element | None) -> str:
+    if element is None:
+        return ""
+    return normalize_whitespace(" ".join(part for part in element.itertext()))
+
+
+def quote_doxygen_value(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def build_doxygen_input_value(paths: list[Path]) -> str:
+    return " \\\n".join(quote_doxygen_value(str(path)) for path in paths)
+
+
+def resolve_path_from_doxygen(repo_root: Path, raw_path: str | None) -> Path | None:
+    if not raw_path:
+        return None
+
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = repo_root / path
+
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def path_to_repo_relative_string(repo_root: Path, path: Path | None) -> str | None:
+    if path is None:
+        return None
+
+    try:
+        return path.relative_to(repo_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def path_with_line(path: str, line: str | None) -> str:
+    if not line or not line.isdigit() or int(line) <= 0:
+        return path
+    return f"{path}:{line}"
+
+
+def has_doxygen_description(member: ET.Element) -> bool:
+    return any(
+        bool(collect_element_text(member.find(tag_name)))
+        for tag_name in ("briefdescription", "detaileddescription")
+    )
+
+
+def build_doxygen_function_signature(member: ET.Element) -> str:
+    definition = normalize_whitespace(member.findtext("definition", default=""))
+    if not definition:
+        definition = normalize_whitespace(member.findtext("name", default=""))
+    args_string = normalize_whitespace(member.findtext("argsstring", default=""))
+    return f"{definition}{args_string}".strip() or "<unknown function>"
+
+
+def build_doxygen_template_signature(member: ET.Element) -> str:
+    return collect_element_text(member.find("templateparamlist"))
+
+
+def get_doxygen_member_paths(member: ET.Element, repo_root: Path) -> list[Path]:
+    location = member.find("location")
+    if location is None:
+        return []
+
+    paths: list[Path] = []
+    for attr_name in ("file", "declfile", "bodyfile"):
+        path = resolve_path_from_doxygen(repo_root, location.attrib.get(attr_name))
+        if path is None or path in paths:
+            continue
+        paths.append(path)
+    return paths
+
+
+def get_doxygen_primary_member_path(member: ET.Element, repo_root: Path) -> Path | None:
+    location = member.find("location")
+    if location is None:
+        return None
+
+    for attr_name in ("file", "declfile", "bodyfile"):
+        path = resolve_path_from_doxygen(repo_root, location.attrib.get(attr_name))
+        if path is not None:
+            return path
+    return None
+
+
+def get_doxygen_member_locations(member: ET.Element, repo_root: Path) -> list[str]:
+    location = member.find("location")
+    if location is None:
+        return []
+
+    locations: list[str] = []
+    for file_attr, line_attr in (("declfile", "declline"), ("bodyfile", "bodystart"), ("file", "line")):
+        path = resolve_path_from_doxygen(repo_root, location.attrib.get(file_attr))
+        if path is None:
+            continue
+        relative_path = path_to_repo_relative_string(repo_root, path)
+        if relative_path is None:
+            continue
+        location_text = path_with_line(relative_path, location.attrib.get(line_attr))
+        if location_text not in locations:
+            locations.append(location_text)
+    return locations
+
+
+def is_cpp_header_path(path: str) -> bool:
+    return Path(path).suffix in (".h", ".hpp", ".hh", ".hxx")
+
+
+def is_cpp_source_path(path: str) -> bool:
+    return Path(path).suffix in (".cpp", ".cc", ".cxx")
+
+
+def function_group_matches(existing_paths: set[str], new_paths: set[str]) -> bool:
+    if existing_paths.intersection(new_paths):
+        return True
+
+    existing_stems = {Path(path).stem for path in existing_paths}
+    new_stems = {Path(path).stem for path in new_paths}
+    if not existing_stems.intersection(new_stems):
+        return False
+
+    return (
+        any(is_cpp_header_path(path) for path in existing_paths)
+        and any(is_cpp_source_path(path) for path in new_paths)
+    ) or (
+        any(is_cpp_source_path(path) for path in existing_paths)
+        and any(is_cpp_header_path(path) for path in new_paths)
+    )
+
+
+def build_cpp_function_check_detail(signature: str, locations: list[str]) -> str:
+    if locations:
+        return f"{', '.join(locations)}: {signature}"
+    return signature
+
+
+def check_cpp_code_has_doxygen_docs(ctx: CheckContext) -> CheckResult:
+    try:
+        tracked_files = git_tracked_files(ctx.repo_root)
+    except RuntimeError as err:
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=False,
+            message="Failed to list tracked files from git",
+            details=[str(err)],
+        )
+
+    tracked_cpp_files = sorted(
+        path.resolve() for path in tracked_files if path.suffix in CPP_EXTENSIONS and path.is_file()
+    )
+    if not tracked_cpp_files:
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=True,
+            message="No tracked C++ files found",
+            details=[],
+        )
+
+    doxygen_executable = shutil.which("doxygen")
+    if doxygen_executable is None:
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=False,
+            message='Required "doxygen" executable was not found in PATH',
+            details=["Install Doxygen or run this check in CI where the consistency workflow installs it."],
+        )
+
+    base_doxyfile = Path(__file__).resolve().parents[1] / "Doxyfile"
+    if not base_doxyfile.is_file():
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=False,
+            message="Shared Doxygen base configuration file is missing",
+            details=[str(base_doxyfile)],
+        )
+
+    tracked_cpp_file_set = set(tracked_cpp_files)
+    with tempfile.TemporaryDirectory(prefix="consistency-doxygen-") as tmp_dir_str:
+        tmp_dir = Path(tmp_dir_str)
+        output_dir = tmp_dir / "out"
+        temp_doxyfile = tmp_dir / "Doxyfile"
+
+        temp_doxyfile.write_text(
+            read_text(base_doxyfile).rstrip()
+            + "\n\n"
+            + "# Overrides for repository consistency check\n"
+            + f"INPUT = {build_doxygen_input_value(tracked_cpp_files)}\n"
+            + f"OUTPUT_DIRECTORY = {quote_doxygen_value(str(output_dir))}\n"
+            + "RECURSIVE = NO\n"
+            + "GENERATE_HTML = NO\n"
+            + "GENERATE_XML = YES\n"
+            + "XML_OUTPUT = xml\n"
+            + "EXTRACT_ALL = YES\n"
+            + "EXTRACT_PRIVATE = YES\n",
+            encoding="utf-8",
+        )
+
+        doxygen_result = run_command([doxygen_executable, str(temp_doxyfile)], cwd=ctx.repo_root)
+        if doxygen_result.returncode != 0:
+            details = []
+            if doxygen_result.stdout.strip():
+                details.append("stdout:\n" + doxygen_result.stdout.strip())
+            if doxygen_result.stderr.strip():
+                details.append("stderr:\n" + doxygen_result.stderr.strip())
+            if not details:
+                details.append("Doxygen exited with a non-zero status without output.")
+            return CheckResult(
+                check_id="cpp_code_has_doxygen_docs",
+                name="Tracked C++ functions are documented for Doxygen",
+                passed=False,
+                message="Doxygen execution failed while checking C++ function documentation",
+                details=details,
+            )
+
+        xml_dir = output_dir / "xml"
+        if not xml_dir.is_dir():
+            return CheckResult(
+                check_id="cpp_code_has_doxygen_docs",
+                name="Tracked C++ functions are documented for Doxygen",
+                passed=False,
+                message="Doxygen did not produce the expected XML output directory",
+                details=[str(xml_dir)],
+            )
+
+        grouped_functions: dict[tuple[str, str], list[dict[str, object]]] = {}
+        for xml_file in sorted(xml_dir.glob("*.xml")):
+            if xml_file.name == "index.xml":
+                continue
+
+            root = ET.parse(xml_file).getroot()
+            for member in root.findall(".//memberdef[@kind='function']"):
+                signature = build_doxygen_function_signature(member)
+                template_signature = build_doxygen_template_signature(member)
+                primary_path = get_doxygen_primary_member_path(member, ctx.repo_root)
+                member_paths = [
+                    path for path in get_doxygen_member_paths(member, ctx.repo_root) if path in tracked_cpp_file_set
+                ]
+                if not member_paths and primary_path is not None and primary_path in tracked_cpp_file_set:
+                    member_paths = [primary_path]
+
+                primary_relative_path = path_to_repo_relative_string(ctx.repo_root, primary_path) or "<unknown file>"
+                relative_paths = {
+                    relative_path
+                    for relative_path in (
+                        path_to_repo_relative_string(ctx.repo_root, path) for path in member_paths
+                    )
+                    if relative_path is not None
+                }
+                member_locations = {
+                    location
+                    for location in get_doxygen_member_locations(member, ctx.repo_root)
+                    if Path(location.split(":", 1)[0]).suffix in CPP_EXTENSIONS
+                }
+                if not relative_paths and primary_relative_path != "<unknown file>":
+                    relative_paths.add(primary_relative_path)
+                if not member_locations and primary_relative_path != "<unknown file>":
+                    member_locations.add(primary_relative_path)
+
+                key = (signature, template_signature)
+                candidate_groups = grouped_functions.setdefault(key, [])
+                group = next(
+                    (
+                        existing_group
+                        for existing_group in candidate_groups
+                        if function_group_matches(existing_group["relative_paths"], relative_paths)
+                    ),
+                    None,
+                )
+                if group is None:
+                    group = {
+                        "signature": signature,
+                        "documented": False,
+                        "locations": set(member_locations),
+                        "relative_paths": set(relative_paths),
+                    }
+                    candidate_groups.append(group)
+
+                group["documented"] = bool(group["documented"]) or has_doxygen_description(member)
+                group["locations"].update(member_locations)
+                group["relative_paths"].update(relative_paths)
+
+        if not grouped_functions:
+            return CheckResult(
+                check_id="cpp_code_has_doxygen_docs",
+                name="Tracked C++ functions are documented for Doxygen",
+                passed=True,
+                message="No C++ functions were discovered by Doxygen in tracked files",
+                details=[],
+            )
+
+        offenders = []
+        for group_list in grouped_functions.values():
+            for group in group_list:
+                if bool(group["documented"]):
+                    continue
+                offenders.append(
+                    build_cpp_function_check_detail(
+                        str(group["signature"]),
+                        sorted(str(location) for location in group["locations"]),
+                    )
+                )
+
+    if offenders:
+        return CheckResult(
+            check_id="cpp_code_has_doxygen_docs",
+            name="Tracked C++ functions are documented for Doxygen",
+            passed=False,
+            message="Some tracked C++ functions are undocumented for Doxygen",
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="cpp_code_has_doxygen_docs",
+        name="Tracked C++ functions are documented for Doxygen",
+        passed=True,
+        message="All tracked C++ functions are documented for Doxygen",
+        details=[],
+    )
+
+
 def discover_ros_package_dirs(repo_root: Path) -> list[Path]:
     package_dirs: list[Path] = []
     for pkg_xml in sorted(repo_root.rglob("package.xml")):
@@ -95,8 +468,583 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def get_ros_package_name(package_dir: Path) -> str | None:
+    package_xml = package_dir / "package.xml"
+    if not package_xml.is_file():
+        return None
+
+    try:
+        root = ET.fromstring(read_text(package_xml))
+    except ET.ParseError:
+        return None
+
+    name = normalize_whitespace(root.findtext("name", default=""))
+    return name or None
+
+
+def discover_ros_packages_by_name(repo_root: Path) -> dict[str, Path]:
+    packages: dict[str, Path] = {}
+    for package_dir in discover_ros_package_dirs(repo_root):
+        package_name = get_ros_package_name(package_dir)
+        if package_name:
+            packages[package_name] = package_dir
+    return packages
+
+
+def generated_readme_paths(repo_root: Path) -> list[Path]:
+    paths = {repo_root / "README.md"}
+    paths.update(package_dir / "README.md" for package_dir in discover_ros_package_dirs(repo_root))
+    return sorted(paths)
+
+
+def snapshot_file_contents(paths: list[Path]) -> dict[Path, str]:
+    return {path: read_text(path) if path.exists() else "" for path in paths}
+
+
+def find_todo_lines(path: Path) -> list[str]:
+    matches: list[str] = []
+    for line_no, line in enumerate(read_text(path).splitlines(), start=1):
+        if "TODO" not in line:
+            continue
+        matches.append(f"{line_no}: {line.strip()}")
+    return matches
+
+
+def build_unified_diff_text(old: str, new: str, path: Path, repo_root: Path) -> str:
+    rel_path = path.relative_to(repo_root).as_posix()
+    return "".join(
+        difflib.unified_diff(
+            old.splitlines(keepends=True),
+            new.splitlines(keepends=True),
+            fromfile=f"a/{rel_path}",
+            tofile=f"b/{rel_path}",
+        )
+    ).rstrip()
+
+
+def build_readme_diff_blocks(
+    repo_root: Path,
+    before_contents: dict[Path, str],
+    after_contents: dict[Path, str],
+) -> list[str]:
+    diff_blocks: list[str] = []
+    for path in sorted(set(before_contents) | set(after_contents)):
+        old_content = before_contents.get(path, "")
+        new_content = after_contents.get(path, "")
+        if old_content == new_content:
+            continue
+        diff_text = build_unified_diff_text(old_content, new_content, path, repo_root)
+        if diff_text:
+            diff_blocks.append(diff_text)
+    return diff_blocks
+
+
 def has_cpp_node_evidence(text: str) -> bool:
     return bool(RE_CPP_NODE_PUBLIC.search(text) or RE_CPP_NODE_BASE_INIT.search(text))
+
+
+def is_identifier_char(ch: str) -> bool:
+    return ch.isalnum() or ch == "_"
+
+
+def skip_string_literal(text: str, pos: int) -> int:
+    quote = text[pos]
+    i = pos + 1
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text[i] == quote:
+            return i + 1
+        i += 1
+    return len(text)
+
+
+def extract_matching_parenthesized(text: str, open_paren_idx: int) -> tuple[str, int] | None:
+    if open_paren_idx >= len(text) or text[open_paren_idx] != "(":
+        return None
+
+    depth = 1
+    i = open_paren_idx + 1
+    while i < len(text):
+        ch = text[i]
+        if ch in ("'", '"'):
+            i = skip_string_literal(text, i)
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_paren_idx + 1 : i], i + 1
+        i += 1
+    return None
+
+
+def extract_matching_bracketed(text: str, open_bracket_idx: int) -> tuple[str, int] | None:
+    if open_bracket_idx >= len(text) or text[open_bracket_idx] != "[":
+        return None
+
+    depth = 1
+    i = open_bracket_idx + 1
+    while i < len(text):
+        ch = text[i]
+        if ch in ("'", '"'):
+            i = skip_string_literal(text, i)
+            continue
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return text[open_bracket_idx + 1 : i], i + 1
+        i += 1
+    return None
+
+
+def split_first_argument(call_args: str) -> str | None:
+    args = split_top_level_arguments(call_args)
+    return args[0] if args else None
+
+
+def split_top_level_arguments(call_args: str) -> list[str]:
+    depth_paren = 0
+    depth_bracket = 0
+    depth_brace = 0
+    depth_angle = 0
+    i = 0
+    start = 0
+    parts: list[str] = []
+
+    while i < len(call_args):
+        ch = call_args[i]
+        if ch in ("'", '"'):
+            i = skip_string_literal(call_args, i)
+            continue
+        if ch == "(":
+            depth_paren += 1
+        elif ch == ")":
+            depth_paren = max(0, depth_paren - 1)
+        elif ch == "[":
+            depth_bracket += 1
+        elif ch == "]":
+            depth_bracket = max(0, depth_bracket - 1)
+        elif ch == "{":
+            depth_brace += 1
+        elif ch == "}":
+            depth_brace = max(0, depth_brace - 1)
+        elif ch == "<":
+            depth_angle += 1
+        elif ch == ">":
+            depth_angle = max(0, depth_angle - 1)
+        elif (
+            ch == ","
+            and depth_paren == 0
+            and depth_bracket == 0
+            and depth_brace == 0
+            and depth_angle == 0
+        ):
+            part = call_args[start:i].strip()
+            if part:
+                parts.append(part)
+            start = i + 1
+        i += 1
+
+    tail = call_args[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def find_call_args(text: str, function_name: str) -> list[tuple[int, str]]:
+    results: list[tuple[int, str]] = []
+    search_from = 0
+    name_len = len(function_name)
+
+    while True:
+        idx = text.find(function_name, search_from)
+        if idx < 0:
+            break
+        search_from = idx + name_len
+
+        before = text[idx - 1] if idx > 0 else ""
+        after = text[idx + name_len] if idx + name_len < len(text) else ""
+        if (before and is_identifier_char(before)) or (after and is_identifier_char(after)):
+            continue
+
+        j = idx + name_len
+        while j < len(text) and text[j].isspace():
+            j += 1
+
+        # Skip template arguments: create_subscription<MsgT>(...)
+        if j < len(text) and text[j] == "<":
+            depth = 1
+            j += 1
+            while j < len(text) and depth > 0:
+                ch = text[j]
+                if ch in ("'", '"'):
+                    j = skip_string_literal(text, j)
+                    continue
+                if ch == "<":
+                    depth += 1
+                elif ch == ">":
+                    depth -= 1
+                j += 1
+            while j < len(text) and text[j].isspace():
+                j += 1
+
+        if j >= len(text) or text[j] != "(":
+            continue
+
+        extracted = extract_matching_parenthesized(text, j)
+        if extracted is None:
+            continue
+        args_text, _ = extracted
+        results.append((idx, args_text))
+
+    return results
+
+
+def unquote_string_literal(literal: str) -> str:
+    stripped = literal.strip()
+    quote_idx_single = stripped.find("'")
+    quote_idx_double = stripped.find('"')
+    quote_idx = -1
+    quote_char = ""
+
+    if quote_idx_single == -1:
+        quote_idx = quote_idx_double
+        quote_char = '"'
+    elif quote_idx_double == -1:
+        quote_idx = quote_idx_single
+        quote_char = "'"
+    else:
+        quote_idx = min(quote_idx_single, quote_idx_double)
+        quote_char = stripped[quote_idx]
+
+    if quote_idx < 0:
+        return stripped
+    end_idx = stripped.rfind(quote_char)
+    if end_idx <= quote_idx:
+        return stripped
+    return stripped[quote_idx + 1 : end_idx]
+
+
+def collect_literal_comm_names(text: str, call_specs: dict[str, int], *, cpp: bool) -> set[str]:
+    literal_matcher = RE_CPP_STRING_LITERAL if cpp else RE_PY_STRING_LITERAL
+    topics: set[str] = set()
+
+    for call_name, arg_index in call_specs.items():
+        for _, args_text in find_call_args(text, call_name):
+            args = split_top_level_arguments(args_text)
+            if len(args) <= arg_index:
+                continue
+            topic_arg = args[arg_index]
+            if not literal_matcher.fullmatch(topic_arg):
+                continue
+            topics.add(unquote_string_literal(topic_arg))
+    return topics
+
+
+def extract_remappable_topics_from_launch(launch_text: str) -> set[str]:
+    marker = "remappable_topics"
+    marker_idx = launch_text.find(marker)
+    if marker_idx < 0:
+        return set()
+
+    equal_idx = launch_text.find("=", marker_idx)
+    if equal_idx < 0:
+        return set()
+
+    bracket_idx = launch_text.find("[", equal_idx)
+    if bracket_idx < 0:
+        return set()
+
+    extracted = extract_matching_bracketed(launch_text, bracket_idx)
+    if extracted is None:
+        return set()
+
+    list_body, _ = extracted
+    topics: set[str] = set()
+    for _, declare_args in find_call_args(list_body, "DeclareLaunchArgument"):
+        default_match = RE_KEYWORD_DEFAULT_VALUE.search(declare_args)
+        if not default_match:
+            continue
+        topics.add(unquote_string_literal(default_match.group(1)))
+    return topics
+
+
+def extract_keyword_string_argument(call_args: str, keyword: str) -> str | None:
+    for arg in split_top_level_arguments(call_args):
+        if "=" not in arg:
+            continue
+        raw_key, raw_value = arg.split("=", 1)
+        if raw_key.strip() != keyword:
+            continue
+        value = raw_value.strip()
+        if not RE_PY_STRING_LITERAL.fullmatch(value):
+            return None
+        return unquote_string_literal(value)
+    return None
+
+
+def extract_launch_node_specs(launch_text: str) -> list[tuple[str, str]]:
+    node_specs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for _, node_args in find_call_args(launch_text, "Node"):
+        package_name = extract_keyword_string_argument(node_args, "package")
+        executable = extract_keyword_string_argument(node_args, "executable")
+        if package_name is None or executable is None:
+            continue
+
+        spec = (package_name, executable)
+        if spec in seen:
+            continue
+        seen.add(spec)
+        node_specs.append(spec)
+
+    return node_specs
+
+
+def discover_default_launch_files_for_package(package_dir: Path) -> list[Path]:
+    launch_dir = package_dir / "launch"
+    if not launch_dir.is_dir():
+        return []
+
+    package_name = get_ros_package_name(package_dir)
+    if not package_name:
+        return []
+
+    preferred_names = [
+        f"{package_name}_launch.py",
+        f"{package_name}.launch.py",
+    ]
+    preferred_matches = [launch_dir / name for name in preferred_names if (launch_dir / name).is_file()]
+    if preferred_matches:
+        return preferred_matches
+
+    launch_files = sorted(launch_dir.glob("*.py"))
+    if len(launch_files) == 1:
+        return launch_files
+
+    return []
+
+
+def find_node_source_files_for_executable(package_dir: Path, executable: str) -> list[Path]:
+    matches: list[Path] = []
+    package_name = get_ros_package_name(package_dir)
+
+    candidate_paths = [
+        package_dir / "src" / f"{executable}.cpp",
+        package_dir / "src" / f"{executable}.cc",
+        package_dir / "src" / f"{executable}.cxx",
+        package_dir / "src" / f"{executable}.py",
+        package_dir / "scripts" / f"{executable}.py",
+    ]
+    if package_name:
+        package_module = package_name.replace("-", "_")
+        candidate_paths.extend(
+            [
+                package_dir / package_module / f"{executable}.py",
+                package_dir / package_name / f"{executable}.py",
+            ]
+        )
+
+    for candidate in candidate_paths:
+        if candidate.is_file() and candidate not in matches:
+            matches.append(candidate)
+    return matches
+
+
+def collect_declared_comm_names_from_source_files(source_files: list[Path]) -> set[str]:
+    cpp_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 0,
+        "create_client": 0,
+    }
+    py_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 1,
+        "create_client": 1,
+    }
+
+    declared_topics: set[str] = set()
+    for source_file in source_files:
+        text = read_text(source_file)
+        if source_file.suffix == ".py":
+            if not (RE_PY_RCLPY_HINT.search(text) and RE_PY_NODE_CLASS.search(text)):
+                continue
+            declared_topics.update(collect_literal_comm_names(text, py_call_specs, cpp=False))
+            continue
+
+        if has_cpp_node_evidence(text):
+            declared_topics.update(collect_literal_comm_names(text, cpp_call_specs, cpp=True))
+
+    return declared_topics
+
+
+def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
+    failing_calls: list[str] = []
+    cpp_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 0,
+        "create_client": 0,
+    }
+    py_call_specs = {
+        "create_publisher": 0,
+        "create_subscription": 0,
+        "create_service": 1,
+        "create_client": 1,
+    }
+
+    for pkg_dir in discover_ros_package_dirs(ctx.repo_root):
+        cpp_files = sorted([p for p in pkg_dir.rglob("*") if p.suffix in CPP_EXTENSIONS and p.is_file()])
+        py_files = sorted([p for p in pkg_dir.rglob("*") if p.suffix == PYTHON_EXTENSION and p.is_file()])
+
+        for path in cpp_files:
+            text = read_text(path)
+            if not has_cpp_node_evidence(text):
+                continue
+
+            for call_name, arg_index in cpp_call_specs.items():
+                for call_idx, args_text in find_call_args(text, call_name):
+                    args = split_top_level_arguments(args_text)
+                    if len(args) <= arg_index:
+                        continue
+                    topic_arg = args[arg_index]
+                    if not RE_CPP_STRING_LITERAL.fullmatch(topic_arg):
+                        continue
+
+                    topic_name = unquote_string_literal(topic_arg)
+                    if not topic_name.startswith("~/"):
+                        line = text.count("\n", 0, call_idx) + 1
+                        failing_calls.append(
+                            f"{path.relative_to(ctx.repo_root)}:{line} {call_name} topic '{topic_name}'"
+                        )
+
+        for path in py_files:
+            text = read_text(path)
+            if not RE_PY_RCLPY_HINT.search(text) or not RE_PY_NODE_CLASS.search(text):
+                continue
+
+            for call_name, arg_index in py_call_specs.items():
+                for call_idx, args_text in find_call_args(text, call_name):
+                    args = split_top_level_arguments(args_text)
+                    if len(args) <= arg_index:
+                        continue
+                    topic_arg = args[arg_index]
+                    if not RE_PY_STRING_LITERAL.fullmatch(topic_arg):
+                        continue
+
+                    topic_name = unquote_string_literal(topic_arg)
+                    if not topic_name.startswith("~/"):
+                        line = text.count("\n", 0, call_idx) + 1
+                        failing_calls.append(
+                            f"{path.relative_to(ctx.repo_root)}:{line} {call_name} topic '{topic_name}'"
+                        )
+
+    if failing_calls:
+        return CheckResult(
+            check_id="ros_pubsub_topics_private_namespace",
+            name="ROS pub/sub topics use private namespace",
+            passed=False,
+            message=(
+                "Some create_publisher/create_subscription/create_service/create_client calls use "
+                "string-literal names "
+                "outside private namespace '~/...'"
+            ),
+            details=sorted(failing_calls),
+        )
+
+    return CheckResult(
+        check_id="ros_pubsub_topics_private_namespace",
+        name="ROS pub/sub topics use private namespace",
+        passed=True,
+        message=(
+            "All checkable create_publisher/create_subscription/create_service/create_client "
+            "string-literal names "
+            "use private namespace '~/...'"
+        ),
+        details=[],
+    )
+
+
+def check_default_launch_remappable_topics_cover_node_pubsub(ctx: CheckContext) -> CheckResult:
+    package_dirs = discover_ros_package_dirs(ctx.repo_root)
+    launch_files: list[Path] = []
+    for package_dir in package_dirs:
+        launch_files.extend(discover_default_launch_files_for_package(package_dir))
+
+    if not launch_files:
+        return CheckResult(
+            check_id="default_launch_remappable_topics_cover_node_pubsub",
+            name="Default launch remappable topics cover node pub/sub topics",
+            passed=True,
+            message="No default ROS package launch files with remappable topic coverage to check",
+            details=[],
+        )
+
+    failures: list[str] = []
+    packages_by_name = discover_ros_packages_by_name(ctx.repo_root)
+
+    for launch_file in sorted(set(launch_files)):
+        launch_text = read_text(launch_file)
+        remappable_topics = extract_remappable_topics_from_launch(launch_text)
+        node_specs = extract_launch_node_specs(launch_text)
+
+        for package_name, executable in node_specs:
+            package_dir = packages_by_name.get(package_name)
+            if package_dir is None:
+                continue
+
+            source_files = find_node_source_files_for_executable(package_dir, executable)
+            if not source_files:
+                continue
+
+            declared_topics = collect_declared_comm_names_from_source_files(source_files)
+            if not declared_topics:
+                continue
+
+            if not remappable_topics:
+                failures.append(
+                    f"{launch_file.relative_to(ctx.repo_root)} ({package_name}/{executable}): "
+                    "no remappable_topics defaults found"
+                )
+                continue
+
+            missing_topics = sorted(topic for topic in declared_topics if topic not in remappable_topics)
+            if missing_topics:
+                failures.append(
+                    f"{launch_file.relative_to(ctx.repo_root)} ({package_name}/{executable}): missing "
+                    + ", ".join(missing_topics)
+                )
+
+    if failures:
+        return CheckResult(
+            check_id="default_launch_remappable_topics_cover_node_pubsub",
+            name="Default launch remappable topics cover node pub/sub topics",
+            passed=False,
+            message=(
+                "Some default launch files do not list launched node pub/sub/service names in "
+                "remappable_topics"
+            ),
+            details=failures,
+        )
+
+    return CheckResult(
+        check_id="default_launch_remappable_topics_cover_node_pubsub",
+        name="Default launch remappable topics cover node pub/sub topics",
+        passed=True,
+        message=(
+            "All checkable launched node pub/sub/service names are listed in default launch "
+            "remappable_topics"
+        ),
+        details=[],
+    )
 
 
 def check_no_top_level_package_xml(ctx: CheckContext) -> CheckResult:
@@ -115,6 +1063,110 @@ def check_no_top_level_package_xml(ctx: CheckContext) -> CheckResult:
         name="No top-level package.xml",
         passed=True,
         message="No package.xml found on repository top-level",
+        details=[],
+    )
+
+
+def check_repository_name_not_ending_with_er(ctx: CheckContext) -> CheckResult:
+    repo_name = ctx.repo_root.name
+
+    if repo_name.endswith("er"):
+        return CheckResult(
+            check_id="repository_name_not_ending_with_er",
+            name='Repository name does not end with "er"',
+            passed=False,
+            message='Repository name ends with "er"; prefer activity/object naming such as trajectory_optimization',
+            details=[repo_name],
+        )
+
+    return CheckResult(
+        check_id="repository_name_not_ending_with_er",
+        name='Repository name does not end with "er"',
+        passed=True,
+        message='Repository name does not end with "er"',
+        details=[],
+    )
+
+
+def check_top_level_license_apache2(ctx: CheckContext) -> CheckResult:
+    license_path = ctx.repo_root / "LICENSE"
+    if not license_path.is_file():
+        return CheckResult(
+            check_id="top_level_license_apache2",
+            name='Top-level "LICENSE" with Apache 2.0',
+            passed=False,
+            message='Top-level "LICENSE" file is missing',
+            details=[str(license_path.relative_to(ctx.repo_root))],
+        )
+
+    license_text = read_text(license_path)
+    required_markers = (
+        "Apache License",
+        "Version 2.0, January 2004",
+        "http://www.apache.org/licenses/",
+    )
+    missing_markers = [marker for marker in required_markers if marker not in license_text]
+    if missing_markers:
+        return CheckResult(
+            check_id="top_level_license_apache2",
+            name='Top-level "LICENSE" with Apache 2.0',
+            passed=False,
+            message='Top-level "LICENSE" does not appear to contain Apache 2.0 text',
+            details=[f"Missing marker: {marker}" for marker in missing_markers],
+        )
+
+    return CheckResult(
+        check_id="top_level_license_apache2",
+        name='Top-level "LICENSE" with Apache 2.0',
+        passed=True,
+        message='Top-level "LICENSE" exists and contains Apache 2.0 markers',
+        details=[],
+    )
+
+
+def check_source_files_have_copyright_notice(ctx: CheckContext) -> CheckResult:
+    try:
+        tracked_files = git_tracked_files(ctx.repo_root)
+    except RuntimeError as err:
+        return CheckResult(
+            check_id="source_files_have_copyright_notice",
+            name="Tracked .cpp/.hpp/.py files include copyright notice",
+            passed=False,
+            message="Failed to list tracked files from git",
+            details=[str(err)],
+        )
+
+    offenders: list[str] = []
+    for path in tracked_files:
+        if path.suffix not in COPYRIGHT_HEADER_EXTENSIONS:
+            continue
+        if not path.is_file():
+            continue
+
+        text = read_text(path)
+        header_window = "\n".join(text.splitlines()[:6])
+        if not RE_COPYRIGHT_HEADER.search(header_window) or not RE_APACHE_SPDX_IDENTIFIER.search(
+            header_window
+        ):
+            offenders.append(str(path.relative_to(ctx.repo_root)))
+
+    if offenders:
+        return CheckResult(
+            check_id="source_files_have_copyright_notice",
+            name="Tracked .cpp/.hpp/.py files include copyright notice",
+            passed=False,
+            message=(
+                "Some tracked .cpp/.hpp/.py files are missing the required copyright "
+                "notice and/or Apache SPDX identifier near the top of the file"
+            ),
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="source_files_have_copyright_notice",
+        name="Tracked .cpp/.hpp/.py files include copyright notice",
+        passed=True,
+        message="All tracked .cpp/.hpp/.py files include the required copyright notice",
         details=[],
     )
 
@@ -175,6 +1227,155 @@ def check_ros_nodes_have_parameter_loader(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_ros_cmake_has_required_lint_block(ctx: CheckContext) -> CheckResult:
+    offenders: list[str] = []
+
+    for pkg_dir in discover_ros_package_dirs(ctx.repo_root):
+        cmake_lists = pkg_dir / "CMakeLists.txt"
+        if not cmake_lists.is_file():
+            continue
+
+        cmake_text = read_text(cmake_lists).replace("\r\n", "\n")
+        if not RE_CMAKE_TARGET_DECL.search(cmake_text):
+            continue
+
+        if EXPECTED_CMAKE_LINT_LINES not in cmake_text:
+            offenders.append(str(cmake_lists.relative_to(ctx.repo_root)))
+
+    if offenders:
+        return CheckResult(
+            check_id="ros_cmake_has_required_lint_block",
+            name="ROS CMake packages with targets include required lint block",
+            passed=False,
+            message=(
+                "Some ROS CMake packages with add_executable/add_library targets "
+                "do not contain the exact required lint lines"
+            ),
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="ros_cmake_has_required_lint_block",
+        name="ROS CMake packages with targets include required lint block",
+        passed=True,
+        message=(
+            "All ROS CMake packages with add_executable/add_library targets "
+            "contain the exact required lint lines"
+        ),
+        details=[],
+    )
+
+
+def check_ros_packagexml_has_required_testdepends(ctx: CheckContext) -> CheckResult:
+    offenders: list[str] = []
+
+    for pkg_dir in discover_ros_package_dirs(ctx.repo_root):
+        package_xml = pkg_dir / "package.xml"
+        if not package_xml.is_file():
+            continue
+        package_xml_text = read_text(package_xml).replace("\r\n", "\n")
+        if EXPECTED_PACKAGEXML_TESTDEPENDS not in package_xml_text:
+            offenders.append(str(package_xml.relative_to(ctx.repo_root)))
+
+    if offenders:
+        return CheckResult(
+            check_id="ros_packagexml_has_required_testdepends",
+            name="ROS packages include required package.xml test_depend block",
+            passed=False,
+            message=(
+                "Some ROS packages "
+                "do not contain the exact required package.xml test_depend lines"
+            ),
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="ros_packagexml_has_required_testdepends",
+        name="ROS packages include required package.xml test_depend block",
+        passed=True,
+        message=(
+            "All ROS packages "
+            "contain the exact required package.xml test_depend lines"
+        ),
+        details=[],
+    )
+
+
+def check_ros_packagexml_has_required_metadata(ctx: CheckContext) -> CheckResult:
+    offenders: list[str] = []
+
+    for pkg_dir in discover_ros_package_dirs(ctx.repo_root):
+        package_xml = pkg_dir / "package.xml"
+        rel_path = str(package_xml.relative_to(ctx.repo_root))
+
+        try:
+            root = ET.fromstring(read_text(package_xml))
+        except ET.ParseError as err:
+            offenders.append(f"{rel_path}: invalid XML ({err})")
+            continue
+
+        package_name = (root.findtext("name") or "").strip()
+        if not package_name:
+            offenders.append(f"{rel_path}: missing <name>...</name>")
+
+        version = (root.findtext("version") or "").strip()
+        if not version:
+            offenders.append(f"{rel_path}: missing <version>...</version>")
+        elif version == "0.0.0":
+            offenders.append(f"{rel_path}: contains placeholder <version>0.0.0</version>")
+
+        description = (root.findtext("description") or "").strip()
+        if not description:
+            offenders.append(f"{rel_path}: missing <description>...</description>")
+
+        licenses = [(license_tag.text or "").strip() for license_tag in root.findall("license")]
+        if not any(licenses):
+            offenders.append(f"{rel_path}: missing <license>...</license>")
+        if any(value == "TODO" for value in licenses):
+            offenders.append(f"{rel_path}: contains placeholder <license>TODO</license>")
+
+        maintainers = [
+            ((maintainer.text or "").strip(), (maintainer.get("email") or "").strip())
+            for maintainer in root.findall("maintainer")
+        ]
+        if not any(name and email for name, email in maintainers):
+            offenders.append(f'{rel_path}: missing <maintainer email="...">...</maintainer>')
+        if any(name == "TODO" and email == "todo@TODO.com" for name, email in maintainers):
+            offenders.append(
+                f'{rel_path}: contains placeholder <maintainer email="todo@TODO.com">TODO</maintainer>'
+            )
+
+        authors = [
+            ((author.text or "").strip(), (author.get("email") or "").strip())
+            for author in root.findall("author")
+        ]
+        if not any(name and email for name, email in authors):
+            offenders.append(f'{rel_path}: missing <author email="...">...</author>')
+        if any(name == "TODO" and email == "todo@TODO.com" for name, email in authors):
+            offenders.append(
+                f'{rel_path}: contains placeholder <author email="todo@TODO.com">TODO</author>'
+            )
+
+    if offenders:
+        return CheckResult(
+            check_id="ros_packagexml_has_required_metadata",
+            name="ROS packages include required package.xml metadata",
+            passed=False,
+            message=(
+                "Some ROS packages are missing required package.xml metadata "
+                "or still contain TODO placeholders"
+            ),
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="ros_packagexml_has_required_metadata",
+        name="ROS packages include required package.xml metadata",
+        passed=True,
+        message="All ROS packages contain required package.xml metadata without TODO placeholders",
+        details=[],
+    )
+
 def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
     expected_links = {
         ".devcontainer": ".openads-dev-environment/.devcontainer/",
@@ -196,7 +1397,9 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
             continue
 
         actual_target = os.readlink(link_path)
-        if actual_target != expected_target:
+        normalized_actual_target = actual_target.rstrip("/")
+        normalized_expected_target = expected_target.rstrip("/")
+        if normalized_actual_target != normalized_expected_target:
             errors.append(
                 f"{link_name}: target mismatch (expected '{expected_target}', got '{actual_target}')"
             )
@@ -214,7 +1417,91 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
         check_id="required_top_level_symlinks",
         name="Required top-level symlinks",
         passed=True,
-        message="All required top-level symlinks exist with exact targets",
+        message="All required top-level symlinks exist with expected targets",
+        details=[],
+    )
+
+
+def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
+    required_workflows = (
+        "docker-ros.yml",
+        "docs.yml",
+        "consistency.yml",
+    )
+    workflows_dir = ctx.repo_root / ".github" / "workflows"
+
+    missing = [
+        str((workflows_dir / workflow).relative_to(ctx.repo_root))
+        for workflow in required_workflows
+        if not (workflows_dir / workflow).is_file()
+    ]
+
+    if missing:
+        return CheckResult(
+            check_id="required_root_ci_workflows",
+            name="Required root CI workflow files",
+            passed=False,
+            message="Required root CI workflow files are missing",
+            details=missing,
+        )
+
+    return CheckResult(
+        check_id="required_root_ci_workflows",
+        name="Required root CI workflow files",
+        passed=True,
+        message="All required root CI workflow files are present",
+        details=[],
+    )
+
+
+def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
+    workflow_files = (
+        "docs.yml",
+        "consistency.yml",
+    )
+    root_workflows_dir = ctx.repo_root / ".github" / "workflows"
+    template_workflows_dir = (
+        ctx.repo_root / ".openads-dev-environment" / ".github" / "workflow_calls"
+    )
+
+    errors: list[str] = []
+    for workflow_name in workflow_files:
+        root_path = root_workflows_dir / workflow_name
+        template_path = template_workflows_dir / workflow_name
+
+        if not root_path.is_file():
+            errors.append(f"missing root workflow: {root_path.relative_to(ctx.repo_root)}")
+            continue
+        if not template_path.is_file():
+            errors.append(f"missing workflow template: {template_path.relative_to(ctx.repo_root)}")
+            continue
+
+        if root_path.read_bytes() != template_path.read_bytes():
+            errors.append(
+                "content mismatch: "
+                f"{root_path.relative_to(ctx.repo_root)} != {template_path.relative_to(ctx.repo_root)}"
+            )
+
+    if errors:
+        return CheckResult(
+            check_id="root_ci_workflows_match_templates",
+            name="Root CI workflows match workflow_call templates",
+            passed=False,
+            message=(
+                "Root CI workflows (excluding docker-ros.yml) do not exactly match "
+                "workflow_call templates"
+            ),
+            details=errors,
+        )
+
+    return CheckResult(
+        check_id="root_ci_workflows_match_templates",
+        name="Root CI workflows match workflow_call templates",
+        passed=True,
+        message=(
+            "Root CI workflows (excluding docker-ros.yml) exactly match "
+            "workflow_call templates"
+        ),
         details=[],
     )
 
@@ -303,6 +1590,9 @@ def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
             details=[str(generator_script)],
         )
 
+    readme_paths = generated_readme_paths(ctx.repo_root)
+    before_readme_contents = snapshot_file_contents(readme_paths)
+
     try:
         before = git_status_porcelain(ctx.repo_root)
     except RuntimeError as err:
@@ -343,23 +1633,39 @@ def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
             details=[str(err)],
         )
 
-    if before != after:
+    after_readme_contents = snapshot_file_contents(readme_paths)
+    readme_diff_blocks = build_readme_diff_blocks(
+        ctx.repo_root,
+        before_readme_contents,
+        after_readme_contents,
+    )
+
+    if before != after or readme_diff_blocks:
         before_set = set(before)
         after_set = set(after)
         added = sorted(after_set - before_set)
         removed = sorted(before_set - after_set)
-        details = []
+        details: list[str] = []
+        if readme_diff_blocks:
+            details.append("README diffs:")
+            details.extend(readme_diff_blocks)
         if added:
             details.append("Added git status entries:")
             details.extend([f"+ {line}" for line in added])
         if removed:
             details.append("Removed git status entries:")
             details.extend([f"- {line}" for line in removed])
+        if readme_diff_blocks and before != after:
+            message = "Running README generator changed README content and git status"
+        elif readme_diff_blocks:
+            message = "Running README generator changed README content"
+        else:
+            message = "Running README generator changed git status"
         return CheckResult(
             check_id="readme_generator_is_idempotent",
             name="README generator produces no git changes",
             passed=False,
-            message="Running README generator changed git status",
+            message=message,
             details=details or ["git status changed (unable to compute detailed diff)"],
         )
 
@@ -372,15 +1678,87 @@ def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_generated_readmes_have_no_todo(ctx: CheckContext) -> CheckResult:
+    offenders: list[str] = []
+
+    for readme_path in generated_readme_paths(ctx.repo_root):
+        if not readme_path.exists():
+            continue
+        rel_path = readme_path.relative_to(ctx.repo_root).as_posix()
+        todo_lines = find_todo_lines(readme_path)
+        offenders.extend(f"{rel_path}:{line}" for line in todo_lines)
+
+    if offenders:
+        return CheckResult(
+            check_id="generated_readmes_have_no_todo",
+            name='Top-level and generated package READMEs contain no "TODO"',
+            passed=False,
+            message='Found "TODO" placeholders in top-level or generated package README files',
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="generated_readmes_have_no_todo",
+        name='Top-level and generated package READMEs contain no "TODO"',
+        passed=True,
+        message='Top-level and generated package README files contain no "TODO" placeholders',
+        details=[],
+    )
+
+
 CHECKS: dict[str, tuple[str, CheckFn]] = {
     "no_top_level_package_xml": ("No top-level package.xml", check_no_top_level_package_xml),
+    "repository_name_not_ending_with_er": (
+        'Repository name does not end with "er"',
+        check_repository_name_not_ending_with_er,
+    ),
+    "top_level_license_apache2": (
+        'Top-level "LICENSE" with Apache 2.0',
+        check_top_level_license_apache2,
+    ),
+    "source_files_have_copyright_notice": (
+        "Tracked .cpp/.hpp/.py files include copyright notice",
+        check_source_files_have_copyright_notice,
+    ),
+    "cpp_code_has_doxygen_docs": (
+        "Tracked C++ functions are documented for Doxygen",
+        check_cpp_code_has_doxygen_docs,
+    ),
     "ros_nodes_have_parameter_loader": (
         "ROS nodes define parameter loader helper",
         check_ros_nodes_have_parameter_loader,
     ),
+    "ros_cmake_has_required_lint_block": (
+        "ROS CMake packages with targets include required lint block",
+        check_ros_cmake_has_required_lint_block,
+    ),
+    "ros_packagexml_has_required_testdepends": (
+        "ROS CMake packages with targets include required package.xml test_depend block",
+        check_ros_packagexml_has_required_testdepends,
+    ),
+    "ros_packagexml_has_required_metadata": (
+        "ROS packages include required package.xml metadata",
+        check_ros_packagexml_has_required_metadata,
+    ),
+    "ros_pubsub_topics_private_namespace": (
+        "ROS pub/sub topics use private namespace",
+        check_ros_pubsub_topics_private_namespace,
+    ),
+    "default_launch_remappable_topics_cover_node_pubsub": (
+        "Default launch remappable topics cover node pub/sub topics",
+        check_default_launch_remappable_topics_cover_node_pubsub,
+    ),
     "required_top_level_symlinks": (
         "Required top-level symlinks",
         check_required_top_level_symlinks,
+    ),
+    "required_root_ci_workflows": (
+        "Required root CI workflow files",
+        check_required_root_ci_workflows,
+    ),
+    "root_ci_workflows_match_templates": (
+        "Root CI workflows match workflow_call templates",
+        check_root_ci_workflows_match_templates,
     ),
     "dev_environment_at_remote_main": (
         ".openads-dev-environment matches origin/main",
@@ -389,6 +1767,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "readme_generator_is_idempotent": (
         "README generator produces no git changes",
         check_readme_generator_is_idempotent,
+    ),
+    "generated_readmes_have_no_todo": (
+        'Top-level and generated package READMEs contain no "TODO"',
+        check_generated_readmes_have_no_todo,
     ),
 }
 
@@ -452,6 +1834,16 @@ def colorize(text: str, color: str, enabled: bool) -> str:
     return f"{color}{text}{ANSI_RESET}"
 
 
+def print_detail(detail: str) -> None:
+    lines = detail.splitlines()
+    if not lines:
+        print("  -")
+        return
+    print(f"  - {lines[0]}")
+    for line in lines[1:]:
+        print(f"    {line}")
+
+
 def print_report(ctx: CheckContext, results: list[CheckResult]) -> None:
     colors_enabled = use_color(sys.stdout)
 
@@ -468,10 +1860,11 @@ def print_report(ctx: CheckContext, results: list[CheckResult]) -> None:
     if failed:
         print("\nFailure details:")
         for result in failed:
-            print(f"- {result.check_id}")
+            colored_check_id = colorize(result.check_id, ANSI_RED, colors_enabled)
+            print(f"- {colored_check_id}")
             if result.details:
                 for detail in result.details:
-                    print(f"  - {detail}")
+                    print_detail(detail)
             else:
                 print("  - (no details provided)")
 

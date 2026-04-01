@@ -1,18 +1,36 @@
-# {{ repo_name }}
+# {{ title }}
 
-{{ badges_block }}
+<p align="center">
+{% if provider == 'github' and owner_lower == 'openads-project' %}  <a href="https://github.com/openads-project"><img src="https://img.shields.io/badge/OpenADS-f5ff01"/></a>
+{% endif %}  <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>
+{% if provider == 'github' %}  <a href="{{ repo_https_url }}/releases/latest"><img src="https://img.shields.io/github/v/release/{{ owner }}/{{ repo_name }}"/></a>
+  <a href="{{ repo_https_url }}/blob/main/LICENSE"><img src="https://img.shields.io/github/license/{{ owner }}/{{ repo_name }}"/></a>
+  <br>
+  <a href="{{ repo_https_url }}/actions/workflows/docker-ros.yml"><img src="{{ repo_https_url }}/actions/workflows/docker-ros.yml/badge.svg"/></a>
+  <a href="{{ pages_url }}"><img src="{{ repo_https_url }}/actions/workflows/docs.yml/badge.svg"/></a>
+  <a href="{{ repo_https_url }}/actions/workflows/consistency.yml"><img src="{{ repo_https_url }}/actions/workflows/consistency.yml/badge.svg"/></a>
+{% endif %}</p>
 
-{{ intro_block }}
+{% if intro_block %}{{ intro_block }}
+{% else %}**TODO: Repository tagline/description**
 
-> [!IMPORTANT]  
-> This repository is part of [🚗 ***OpenADS***](https://github.com/{{ owner }}), the *Open Automated Driving Stack*.
+TODO: High-level repository introduction paragraph
+{% endif %}
+<p align="center">
+  <strong>🚀 <a href="#-quick-start">Quick Start</a></strong> • <strong>💻 <a href="#-development">Development</a></strong> • <strong>📝 <a href="#-documentation">Documentation</a></strong>
+</p>
 
-**🚀 [Quick Start](#-quick-start)** | **🧑‍💻 [Development](#-development)** | **📝 [Documentation](#-documentation)** | **🙏 [Acknowledgements](#-acknowledgements)**
+> [!IMPORTANT]
+> This repository is part of [***OpenADS***](https://github.com/openads-project), the *Open Automated Driving Stack*.
+{% if pre_quickstart_block %}
 
+{{ pre_quickstart_block }}
+{% endif %}
 
 ## 🚀 Quick Start
 
-1. Start a container of the pre-built runtime image.
+{% if quickstart_body %}{{ quickstart_body }}
+{% else %}1. Start a container of the pre-built runtime image.
     ```bash
     docker run --rm -it {{ container_image }} bash
     ```
@@ -21,7 +39,24 @@
     ros2 launch {{ quickstart_package }} {{ quickstart_launch_file }}
     ```
 
-## 🧑‍💻 Development
+<!-- TODO: replace default quick start with repo-specific demo (Docker Compose)
+
+1. Launch a container of the pre-built runtime image in the provided demo [Docker Compose](demo/docker-compose.yml) setup.
+    ```bash
+    cd demo
+    xhost +local: # allow GUI forwarding from containers
+    docker compose up
+    ```
+1. Observe ...
+1. Stop the demo and clean up.
+    > *Ctrl+C*
+    ```bash
+    docker compose down
+    xhost -local: # revoke GUI forwarding permissions
+    ```
+-->
+{% endif %}
+## 💻 Development
 
 ### Set up Development Environment
 
@@ -29,7 +64,7 @@
     ```bash
     git clone {{ repo_https_url }}.git
     ```
-1. Initialize the [`.openads-dev-environment`](https://github.com/{{ owner }}/openads-dev-environment) submodule containing development environment configuration.
+1. Initialize the [`.openads-dev-environment`](https://github.com/openads-project/openads-dev-environment) submodule containing development environment configuration.
     ```bash
     cd {{ repo_name }}
     git submodule update --init --recursive
@@ -38,7 +73,7 @@
     ```bash
     code .
     ```
-1. Install the recommended VS Code extensions.  
+1. Install the recommended VS Code extensions.
     > *Ctrl+Shift+P / Extensions: Show Recommended Extensions / Install Workspace Recommended Extensions (Cloud Download Icon)*
 1. Reopen the repository in a [Dev Container](https://code.visualstudio.com/docs/devcontainers/containers).
     > *Ctrl+Shift+P / Dev Containers: Rebuild and Reopen in Container*
@@ -47,8 +82,6 @@
 
 > *Ctrl+Shift+B*
 
-or
-
 ```bash
 colcon build
 ```
@@ -56,8 +89,6 @@ colcon build
 ### Run Tests
 
 > *Ctrl+Shift+P / Tasks: Run Test Task*
-
-or
 
 ```bash
 colcon build --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1
@@ -68,9 +99,30 @@ colcon test-result --verbose
 
 ## 📝 Documentation
 
-{% for line in documentation_lines %}{{ line }}
+{% if pages_url %}Package and node interfaces are documented in the respective package READMEs listed below. Implementation details are found in the [Source Code Documentation]({{ pages_url }}).
+
+{% endif %}| Package | Description |
+| --- | --- |
+{% for package in repository_packages %}| [{{ package.name }}]({{ package.path }}) | {{ package.description }} |
 {% endfor %}
+## ⚖️ Licensing
+
+The source code in this repository is licensed under Apache-2.0, see [LICENSE](LICENSE). Container images provided by this repository may contain third-party software shipped with their own license terms.{% if licensing_extra_body %}
+
+{{ licensing_extra_body }}{% endif %}
 
 ## 🙏 Acknowledgements
 
-{{ acknowledgements_body }}
+{% if acknowledgements_body %}{{ acknowledgements_body }}
+{% else %}Development and maintenance of this repository are supported by the following projects. We acknowledge the funding of the respective institutions.
+
+| Project | Funding Institution | Grant Number |
+| --- | --- | --- |
+| TODO | TODO | TODO |
+
+<p>
+  <img src="https://www.drought.uni-freiburg.de/stressres/images/bmftr-logo/image" height=70>
+  <img src="https://ec.europa.eu/regional_policy/images/information-sources/logo-download-center/eu_funded_en.jpg" height=70>
+</p>
+
+<sub><sup>Funded by the European Union. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or the European Climate, Infrastructure and Environment Executive Agency (CINEA). Neither the European Union nor CINEA can be held responsible for them.</sup></sub>{% endif %}

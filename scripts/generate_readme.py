@@ -74,6 +74,8 @@ class NodeInterfaces:
 
 @dataclass
 class RepoMetadata:
+    host: str
+    provider: str
     owner: str
     repo: str
     owner_lower: str
@@ -85,14 +87,16 @@ class RepoMetadata:
 @dataclass
 class PackageSection:
     title: str
-    body: str
+    kind: str
+    interface_entries: list = field(default_factory=list)
+    nodes: list = field(default_factory=list)
+    launch_files: list = field(default_factory=list)
 
 
 @dataclass
 class PackageTemplateContext:
     package_name: str
     package_description: str
-    toc_lines: list[str]
     sections: list[PackageSection]
 
 
@@ -100,26 +104,80 @@ class PackageTemplateContext:
 class PackageDocEntry:
     name: str
     path: str
+    description: str
+
+
+@dataclass
+class InterfaceTableRow:
+    name: str
+    interface_type: str
+    description: str
+
+
+@dataclass
+class InterfaceDefinitionEntry:
+    full_type: str
+    rel_path: str
+    description: str
+
+
+@dataclass
+class LaunchArgumentRow:
+    name: str
+    default: str
+    description: str
+
+
+@dataclass
+class LaunchFileTemplateContext:
+    name: str
+    rel_path: str
+    arguments: list[LaunchArgumentRow]
+
+
+@dataclass
+class NodeTemplateContext:
+    node_name: str
+    manual_text: str
+    subscribers: list[InterfaceTableRow]
+    publishers: list[InterfaceTableRow]
+    service_servers: list[InterfaceTableRow]
+    action_servers: list[InterfaceTableRow]
+    action_clients: list[InterfaceTableRow]
+    parameters: list[Parameter]
 
 
 @dataclass
 class TopLevelTemplateContext:
+    title: str
     repo_name: str
     owner: str
+    owner_lower: str
+    provider: str
     pages_url: str
     repo_https_url: str
     container_image: str
-    badges_block: str
-    intro_block: str
+    intro_block: Optional[str]
+    pre_quickstart_block: str
+    quickstart_body: Optional[str]
     quickstart_package: str
     quickstart_launch_file: str
-    documentation_lines: list[str]
-    acknowledgements_body: str
+    repository_packages: list[PackageDocEntry]
+    licensing_extra_body: str
+    acknowledgements_body: Optional[str]
 
 
 # ---------------------------------------------------------------------------
 # Type helpers
 # ---------------------------------------------------------------------------
+
+MANUAL_TABLE_HEADERS = {
+    '| Topic | Type | Description |': 'topic',
+    '| Action | Type | Description |': 'action',
+    '| Service | Type | Description |': 'service',
+    '| Type | Description |': 'interface',
+    '| Argument | Default | Description |': 'launch_arg',
+}
 
 def cpp_ros_type(cpp_type: str, type_aliases: dict) -> str:
     """Resolve type aliases and convert C++ ROS type to ROS notation (:: -> /)."""
@@ -133,22 +191,37 @@ def cpp_param_type(cpp_type: str) -> str:
     t = cpp_type.strip()
     if t in ('double', 'float'):
         return 'float'
-    if t == 'int':
+    if t in ('int', 'long', 'long int', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t'):
         return 'int'
     if t == 'bool':
         return 'bool'
     if t == 'std::string':
         return 'string'
-    if 'vector' in t:
-        return 'string[]'
+    vector_match = re.match(r'std::vector\s*<\s*([^>]+)\s*>', t)
+    if vector_match:
+        element_type = vector_match.group(1).strip()
+        if element_type in ('double', 'float'):
+            return 'float[]'
+        if element_type in ('int', 'long', 'long int', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t'):
+            return 'int[]'
+        if element_type == 'bool':
+            return 'bool[]'
+        if element_type == 'std::string':
+            return 'string[]'
+        return f'{element_type}[]'
     return t
 
 
-def format_default(default_str: Optional[str], cpp_type: str) -> str:
+def format_default(default_str: Optional[str], cpp_type: str, enum_value_map: dict[str, str]) -> str:
     """Format a C++ default value for Markdown display."""
     if default_str is None:
         return '[]' if 'vector' in cpp_type else ''
-    return default_str.strip()
+    formatted = default_str.strip()
+    if formatted in enum_value_map:
+        return enum_value_map[formatted]
+    if 'vector' in cpp_type and formatted.startswith('{') and formatted.endswith('}'):
+        return f'[{formatted[1:-1].strip()}]'
+    return formatted
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +362,12 @@ def extract_python_launch_arguments(source: str) -> list:
         else:
             dv_expr = re.search(
                 r'default_value\s*=\s*(.+?)(?=,\s*\w+\s*=|\s*$)', call_body, re.DOTALL)
-            default = dv_expr.group(1).strip() if dv_expr else ''
+            if dv_expr:
+                default = ' '.join(dv_expr.group(1).split())
+                default = re.sub(r'\(\s+', '(', default)
+                default = re.sub(r'\s+\)', ')', default)
+            else:
+                default = ''
 
         desc_m = re.search(r'description\s*=\s*"([^"]*)"', call_body)
         description = desc_m.group(1) if desc_m else ''
@@ -327,8 +405,8 @@ def extract_launch_arguments(path: Path) -> list:
 def build_member_var_map(headers: list) -> dict:
     """Return {var_name: (cpp_type, default_str)} from member variable declarations."""
     pattern = re.compile(
-        r'\b(double|float|int|bool|std::string|std::vector\s*<[^>]+>)\s+(\w+_)\s*'
-        r'(?:=\s*([^;{]+))?;'
+        r'\b(double|float|int|long|long\s+int|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|bool|std::string|std::vector\s*<[^>]+>)\s+(\w+_)\s*'
+        r'(?:=\s*([^;]+))?;'
     )
     result = {}
     for header in headers:
@@ -336,6 +414,21 @@ def build_member_var_map(headers: list) -> dict:
             var_name = m.group(2).strip()
             if var_name not in result:
                 result[var_name] = (m.group(1).strip(), m.group(3))
+    return result
+
+
+def build_enum_value_map(headers: list) -> dict[str, str]:
+    """Return {'ENUM::MEMBER': 'value'} for simple enum definitions in headers."""
+    enum_pattern = re.compile(r'enum\s+(\w+)\s*\{(.*?)\};', re.DOTALL)
+    entry_pattern = re.compile(r'(\w+)\s*=\s*(-?\d+)')
+    result = {}
+    for header in headers:
+        source = header.read_text(errors='replace')
+        for enum_match in enum_pattern.finditer(source):
+            enum_name = enum_match.group(1)
+            body = enum_match.group(2)
+            for entry_match in entry_pattern.finditer(body):
+                result[f'{enum_name}::{entry_match.group(1)}'] = entry_match.group(2)
     return result
 
 
@@ -349,14 +442,14 @@ def build_type_alias_map(headers: list) -> dict:
     return result
 
 
-def resolve_parameters(raw_params: list, member_var_map: dict) -> list:
+def resolve_parameters(raw_params: list, member_var_map: dict, enum_value_map: dict[str, str]) -> list:
     params = []
     for name, member_var, description in raw_params:
         cpp_type, default_raw = member_var_map.get(member_var, ('', None))
         params.append(Parameter(
             name=name,
             ros_type=cpp_param_type(cpp_type),
-            default=format_default(default_raw, cpp_type),
+            default=format_default(default_raw, cpp_type, enum_value_map),
             description=description,
         ))
     return params
@@ -366,92 +459,286 @@ def resolve_parameters(raw_params: list, member_var_map: dict) -> list:
 # Markdown rendering
 # ---------------------------------------------------------------------------
 
-def md_topic_table(interfaces: list) -> str:
-    rows = ['| Topic | Type | Description |', '| --- | --- | --- |']
-    rows += [f'| `{i.name}` | `{i.msg_type}` | |' for i in interfaces]
-    return '\n'.join(rows)
+def normalize_table_cell(cell: str) -> str:
+    """Normalize Markdown table cell content for stable matching."""
+    return ' '.join(cell.strip().split())
 
 
-def md_action_table(interfaces: list) -> str:
-    rows = ['| Action | Type | Description |', '| --- | --- | --- |']
-    rows += [f'| `{i.name}` | `{i.action_type}` | |' for i in interfaces]
-    return '\n'.join(rows)
+def sanitize_manual_content(content: str) -> str:
+    """Normalize preserved description content from existing README tables."""
+    return content.strip()
 
 
-def md_service_table(interfaces: list) -> str:
-    rows = ['| Service | Type | Description |', '| --- | --- | --- |']
-    rows += [f'| `{i.name}` | `{i.srv_type}` | |' for i in interfaces]
-    return '\n'.join(rows)
+def render_table_cell(content: str) -> str:
+    """Render Markdown table cells with an explicit placeholder for blank values."""
+    normalized = content.strip()
+    return normalized if normalized else 'TODO'
 
 
-def md_launch_args_table(args: list) -> str:
-    rows = ['| Argument | Default | Description |', '| --- | --- | --- |']
-    rows += [f'| `{name}` | `{default}` | {description} |' for name, default, description in args]
-    return '\n'.join(rows)
+def manual_key(heading_path: tuple[str, ...], table_kind: str, row_cells: list[str]) -> tuple:
+    return (
+        tuple(heading_path),
+        table_kind,
+        tuple(normalize_table_cell(cell) for cell in row_cells),
+    )
 
 
-def md_interface_table(entries: list) -> str:
-    rows = ['| Type | Description |', '| --- | --- |']
-    rows += [f'| [`{full_type}`]({rel_path}) | |' for full_type, rel_path in entries]
-    return '\n'.join(rows)
+def fallback_manual_key(table_kind: str, row_cells: list[str]) -> tuple:
+    return (
+        table_kind,
+        tuple(normalize_table_cell(cell) for cell in row_cells),
+    )
 
 
-def render_launch_files(launch_files: list, doc_root: Path) -> str:
-    parts = []
-    for f in launch_files:
-        section = [f'### [`{f.name}`]({f.relative_to(doc_root)})']
-        args = extract_launch_arguments(f)
-        if args:
-            section += ['', md_launch_args_table(args)]
-        parts.append('\n'.join(section))
-    return '\n\n'.join(parts)
+def split_table_row(line: str) -> list[str]:
+    """Split a simple Markdown table row into normalized cell values."""
+    return [normalize_table_cell(cell) for cell in line.split('|')[1:-1]]
 
 
-def md_parameter_table(params: list) -> str:
-    rows = ['| Parameter | Type | Default | Description |', '| --- | --- | --- | --- |']
-    rows += [f'| `{p.name}` | `{p.ros_type}` | `{p.default}` | {p.description} |'
-             for p in params]
-    return '\n'.join(rows)
+def extract_manual_descriptions(readme_text: str) -> dict[tuple, str]:
+    """Extract manually maintained description cells from existing README tables."""
+    result = {}
+    heading_path: list[str] = []
+    current_table_kind = None
+
+    for line in readme_text.splitlines():
+        heading_match = re.match(r'^(#{1,6})\s+(.*)$', line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            title = heading_match.group(2).strip()
+            heading_path = heading_path[:level - 1]
+            heading_path.append(title)
+            current_table_kind = None
+            continue
+
+        stripped = line.strip()
+        if stripped in MANUAL_TABLE_HEADERS:
+            current_table_kind = MANUAL_TABLE_HEADERS[stripped]
+            continue
+        if current_table_kind and stripped.startswith('| ---'):
+            continue
+        if current_table_kind and stripped.startswith('|'):
+            cells = split_table_row(line)
+            if len(cells) >= 2:
+                description = sanitize_manual_content(cells[-1])
+                key_cells = cells[:-1]
+                result[manual_key(tuple(heading_path), current_table_kind, key_cells)] = description
+                if description:
+                    result.setdefault(fallback_manual_key(current_table_kind, key_cells), description)
+            continue
+        if stripped:
+            current_table_kind = None
+
+    return result
 
 
-def render_node_diagram(node: NodeInterfaces) -> str:
-    """Return a Mermaid flowchart showing the node's pub/sub/action interfaces."""
-    def q(s: str) -> str:
-        return s.replace('"', "'")
+def extract_manual_node_texts(readme_text: str) -> dict[str, str]:
+    """Extract manually maintained free text directly below node headings."""
+    result = {}
+    lines = readme_text.splitlines()
+    in_nodes_section = False
+    i = 0
 
-    lines = ['```mermaid', 'flowchart LR']
-    lines.append(f'    NODE("{q(node.node_name)}")')
-    for i, s in enumerate(node.subscribers):
-        lines.append(f'    S{i}:::hidden -->|{q(s.name)}| NODE')
-    for i, ss in enumerate(node.service_servers):
-        lines.append(f'    SS{i}:::hidden o--o|{q(ss.name)}| NODE')
-    for i, p in enumerate(node.publishers):
-        lines.append(f'    NODE -->|{q(p.name)}| P{i}:::hidden')
-    for i, a in enumerate(node.action_servers):
-        lines.append(f'    AS{i}:::hidden o-.-o|{q(a.name)}| NODE')
-    lines.append('    classDef hidden display: none;')
-    lines.append('```')
-    return '\n'.join(lines)
+    while i < len(lines):
+        line = lines[i]
+
+        if re.match(r'^##\s+Nodes\s*$', line.strip()):
+            in_nodes_section = True
+            i += 1
+            continue
+
+        if in_nodes_section and re.match(r'^##\s+', line):
+            in_nodes_section = False
+
+        if not in_nodes_section:
+            i += 1
+            continue
+
+        heading_match = re.match(r'^###\s+`([^`]+)`\s*$', line)
+        if not heading_match:
+            i += 1
+            continue
+
+        node_name = heading_match.group(1)
+        i += 1
+        body_lines = []
+
+        while i < len(lines):
+            current = lines[i]
+            stripped = current.strip()
+
+            if re.match(r'^##\s+', current) or re.match(r'^###\s+', current):
+                break
+            if stripped == '```mermaid' or re.match(r'^####\s+', current):
+                break
+
+            body_lines.append(current)
+            i += 1
+
+        trimmed = trim_blank_lines(body_lines)
+        if trimmed:
+            result[node_name] = '\n'.join(trimmed)
+
+    return result
 
 
-def render_node(node: NodeInterfaces) -> str:
-    parts = [f'### `{node.node_name}`']
-    if node.subscribers or node.publishers or node.service_servers or node.action_servers:
-        parts += ['', render_node_diagram(node)]
-    if node.subscribers:
-        parts += ['\n#### Subscribed Topics\n', md_topic_table(node.subscribers)]
-    if node.publishers:
-        parts += ['\n#### Published Topics\n', md_topic_table(node.publishers)]
-    if node.service_servers:
-        parts += ['\n#### Service Servers\n', md_service_table(node.service_servers)]
-    if node.action_servers:
-        parts += ['\n#### Action Servers\n', md_action_table(node.action_servers)]
-    if node.action_clients:
-        parts += ['\n#### Action Clients\n', md_action_table(node.action_clients)]
-    if node.parameters:
-        parts += ['\n#### Parameters\n', md_parameter_table(node.parameters)]
-    return '\n'.join(parts)
+def render_manual_cell(
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+    table_kind: str,
+    row_cells: list[str],
+) -> str:
+    exact = manual_descriptions.get(manual_key(heading_path, table_kind, row_cells), '')
+    if exact:
+        return render_table_cell(exact)
+    return render_table_cell(manual_descriptions.get(fallback_manual_key(table_kind, row_cells), ''))
 
+
+def build_interface_rows(
+    interfaces: list,
+    type_attr: str,
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+    table_kind: str,
+) -> list[InterfaceTableRow]:
+    return [
+        InterfaceTableRow(
+            name=i.name,
+            interface_type=getattr(i, type_attr),
+            description=render_manual_cell(
+                manual_descriptions,
+                heading_path,
+                table_kind,
+                [f"`{i.name}`", f"`{getattr(i, type_attr)}`"],
+            ),
+        )
+        for i in interfaces
+    ]
+
+
+def build_launch_argument_rows(
+    args: list,
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+) -> list[LaunchArgumentRow]:
+    rows = []
+    for name, default, _description in args:
+        name_cell = render_table_cell(name)
+        default_cell = render_table_cell(default)
+        rows.append(
+            LaunchArgumentRow(
+                name=name_cell,
+                default=default_cell,
+                description=render_manual_cell(
+                    manual_descriptions,
+                    heading_path,
+                    'launch_arg',
+                    [f'`{name_cell}`', f'`{default_cell}`'],
+                ),
+            )
+        )
+    return rows
+
+
+def build_interface_definition_entries(
+    entries: list,
+    manual_descriptions: dict[tuple, str],
+    heading_path: tuple[str, ...],
+) -> list[InterfaceDefinitionEntry]:
+    return [
+        InterfaceDefinitionEntry(
+            full_type=full_type,
+            rel_path=rel_path.as_posix(),
+            description=render_manual_cell(
+                manual_descriptions,
+                heading_path,
+                'interface',
+                [f'[`{full_type}`]({rel_path.as_posix()})'],
+            ),
+        )
+        for full_type, rel_path in entries
+    ]
+
+
+def build_parameter_rows(params: list[Parameter]) -> list[Parameter]:
+    return [
+        Parameter(
+            name=render_table_cell(param.name),
+            ros_type=render_table_cell(param.ros_type),
+            default=render_table_cell(param.default),
+            description=render_table_cell(param.description),
+        )
+        for param in params
+    ]
+
+
+def build_launch_file_contexts(
+    launch_files: list,
+    doc_root: Path,
+    manual_descriptions: dict[tuple, str],
+) -> list[LaunchFileTemplateContext]:
+    contexts = []
+    for launch_file in launch_files:
+        rel_path = launch_file.relative_to(doc_root).as_posix()
+        contexts.append(
+            LaunchFileTemplateContext(
+                name=launch_file.name,
+                rel_path=rel_path,
+                arguments=build_launch_argument_rows(
+                    extract_launch_arguments(launch_file),
+                    manual_descriptions,
+                    ('Launch Files', f'[`{launch_file.name}`]({rel_path})'),
+                ),
+            )
+        )
+    return contexts
+
+
+def build_node_context(
+    node: NodeInterfaces,
+    manual_descriptions: dict[tuple, str],
+    manual_node_texts: dict[str, str],
+) -> NodeTemplateContext:
+    return NodeTemplateContext(
+        node_name=node.node_name,
+        manual_text=manual_node_texts.get(node.node_name, ''),
+        subscribers=build_interface_rows(
+            node.subscribers,
+            'msg_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Subscribed Topics'),
+            'topic',
+        ),
+        publishers=build_interface_rows(
+            node.publishers,
+            'msg_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Published Topics'),
+            'topic',
+        ),
+        service_servers=build_interface_rows(
+            node.service_servers,
+            'srv_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Service Servers'),
+            'service',
+        ),
+        action_servers=build_interface_rows(
+            node.action_servers,
+            'action_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Action Servers'),
+            'action',
+        ),
+        action_clients=build_interface_rows(
+            node.action_clients,
+            'action_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Action Clients'),
+            'action',
+        ),
+        parameters=build_parameter_rows(node.parameters),
+    )
 
 def print_diff(old: str, new: str, path: Path) -> None:
     """Print a colored unified diff of old vs new to stderr."""
@@ -477,27 +764,25 @@ def print_diff(old: str, new: str, path: Path) -> None:
         sys.stderr.write(f'{color}{line}{RESET if color else ""}')
 
 
-def render_toc(node_names: list, has_launch_files: bool) -> str:
-    entries = []
-    if node_names:
-        entries.append('- [Nodes](#nodes)')
-        entries += [f'  - [{name}](#{name})' for name in node_names]
-    if has_launch_files:
-        entries.append('- [Launch Files](#launch-files)')
-    return '\n'.join(entries)
+
+
+def extract_package_description(readme_text: str, fallback: str) -> str:
+    """Return a manually maintained package intro block or the package.xml fallback."""
+    m = re.search(r'^#\s+.+?\n\n(.*?)(?=^##\s|\Z)', readme_text, re.DOTALL | re.MULTILINE)
+    if m and m.group(1).strip():
+        return m.group(1).rstrip()
+    return fallback
 
 
 def render_package_readme(
     template_env: Environment,
     package_name: str,
     package_description: str,
-    toc_lines: list[str],
     sections: list[PackageSection],
 ) -> str:
     context = PackageTemplateContext(
         package_name=package_name,
         package_description=package_description,
-        toc_lines=toc_lines,
         sections=sections,
     )
     rendered = render_template(
@@ -512,12 +797,17 @@ def render_package_readme(
 # Top-level README rendering
 # ---------------------------------------------------------------------------
 
-INTRO_PLACEHOLDER = (
-    '**TODO: Repository tagline/description**\n\n'
-    'TODO: High-level repository introduction paragraph'
-)
+PRE_QUICKSTART_PLACEHOLDER = ''
 
-ACK_PLACEHOLDER = 'TODO: Project/funding acknowledgements'
+
+def trim_blank_lines(lines: list[str]) -> list[str]:
+    """Remove leading and trailing blank lines from a list of lines."""
+    trimmed = list(lines)
+    while trimmed and not trimmed[0].strip():
+        trimmed.pop(0)
+    while trimmed and not trimmed[-1].strip():
+        trimmed.pop()
+    return trimmed
 
 
 def build_template_environment() -> Environment:
@@ -554,77 +844,171 @@ def get_origin_remote(repo_root: Path) -> str:
     ).strip()
 
 
-def parse_github_remote(remote: str) -> RepoMetadata:
-    """Extract owner/repo metadata from GitHub-style remote URL."""
-    m = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$', remote)
-    if not m:
+def parse_repo_remote(remote: str) -> RepoMetadata:
+    """Extract repository metadata from HTTPS and SSH git remotes."""
+    remote = remote.strip()
+
+    url_match = re.match(r'^[a-z][a-z0-9+.-]*://(?:(?:[^@/]+)@)?([^/]+)/(.+?)(?:\.git)?/?$', remote, re.IGNORECASE)
+    ssh_match = re.match(r'^(?:[^@]+@)?([^:]+):(.+?)(?:\.git)?$', remote)
+
+    if url_match:
+        host, path = url_match.group(1), url_match.group(2)
+    elif ssh_match:
+        host, path = ssh_match.group(1), ssh_match.group(2)
+    else:
         raise ValueError(f'Unsupported origin remote URL: {remote}')
-    owner, repo = m.group(1), m.group(2)
+
+    path_parts = [part for part in path.split('/') if part]
+    if len(path_parts) < 2:
+        raise ValueError(f'Unsupported origin remote URL: {remote}')
+
+    owner = '/'.join(path_parts[:-1])
+    repo = path_parts[-1]
     owner_lower = owner.lower()
+    provider = 'github' if host.lower() == 'github.com' else 'other'
+    repo_https_url = f'https://{host}/{path}'
+
+    pages_url = f'https://openads-project.github.io/{repo}'
+    container_image = 'TODO'
+    if provider == 'github':
+        container_image = f'ghcr.io/{owner_lower}/{repo}:latest'
+
     return RepoMetadata(
+        host=host,
+        provider=provider,
         owner=owner,
         repo=repo,
         owner_lower=owner_lower,
-        pages_url=f'https://{owner_lower}.github.io/{repo}',
-        repo_https_url=f'https://github.com/{owner}/{repo}',
-        container_image=f'ghcr.io/{owner_lower}/{repo}:latest',
+        pages_url=pages_url,
+        repo_https_url=repo_https_url,
+        container_image=container_image,
     )
 
 
-def extract_intro_block(readme_text: str) -> str:
-    """Return repo-specific intro block (headline + paragraph) or placeholder."""
-    m = re.search(r'</p>\n\n(.*?)\n\n> \[!IMPORTANT\]', readme_text, re.DOTALL)
+
+
+def extract_intro_block(readme_text: str) -> Optional[str]:
+    """Return repo-specific intro block (headline + paragraph), if present."""
+    m = re.search(
+        r'^#\s+.+?\n\n(?:(?:<p align="center">\n.*?\n</p>|<table align="center">\n.*?\n</table>)\n\n)?(.*?)(?=\n<p align="center">\n  <strong>🚀|\n> \[!IMPORTANT\]|\n##[^\n]*Quick Start|\Z)',
+        readme_text,
+        re.DOTALL | re.MULTILINE,
+    )
     if m and m.group(1).strip():
         return m.group(1).strip()
-    return INTRO_PLACEHOLDER
+    return None
 
 
-def extract_acknowledgements_body(readme_text: str) -> str:
-    """Return repo-specific acknowledgements body or placeholder."""
-    m = re.search(r'^## 🙏 Acknowledgements\n\n(.*)\Z', readme_text, re.DOTALL | re.MULTILINE)
+def extract_h2_section_body(readme_text: str, section_title: str) -> Optional[str]:
+    """Return the body of an H2 section whose title contains section_title."""
+    m = re.search(
+        rf'^##[^\n]*{re.escape(section_title)}[^\n]*\n\n(.*?)(?=^##\s|\Z)',
+        readme_text,
+        re.DOTALL | re.MULTILINE,
+    )
     if m and m.group(1).strip():
         return m.group(1).rstrip()
-    return ACK_PLACEHOLDER
+    return None
 
 
-def render_badges(meta: RepoMetadata) -> str:
-    return (
-        '<p align="center">\n'
-        f'  <a href="https://github.com/{meta.owner_lower}"><img src="https://img.shields.io/badge/OpenADS-ffff00"/></a>\n'
-        f'  <a href="{meta.repo_https_url}/releases/latest"><img src="https://img.shields.io/github/v/release/{meta.owner}/{meta.repo}"/></a>\n'
-        f'  <a href="{meta.repo_https_url}/blob/main/LICENSE"><img src="https://img.shields.io/github/license/{meta.owner}/{meta.repo}"/></a>\n'
-        '  <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>\n'
-        '  <br>\n'
-        f'  <a href="{meta.repo_https_url}/actions/workflows/docker-ros.yml"><img src="{meta.repo_https_url}/actions/workflows/docker-ros.yml/badge.svg"/></a>\n'
-        f'  <a href="{meta.repo_https_url}/actions/workflows/industrial_ci.yml"><img src="{meta.repo_https_url}/actions/workflows/industrial_ci.yml/badge.svg"/></a>\n'
-        f'  <a href="https://{meta.owner}.github.io/{meta.repo}"><img src="{meta.repo_https_url}/actions/workflows/docs.yml/badge.svg"/></a>\n'
-        f'  <a href="{meta.repo_https_url}/actions/workflows/consistency.yml"><img src="{meta.repo_https_url}/actions/workflows/consistency.yml/badge.svg"/></a>\n'
-        '</p>'
+def extract_pre_quickstart_block(readme_text: str) -> str:
+    """Return custom content between IMPORTANT block and Quick Start, or placeholder."""
+    m = re.search(
+        r'> \[!IMPORTANT\]\s*\n(?:>.*\n)+\n(.*?)\n\n## 🚀 Quick Start',
+        readme_text,
+        re.DOTALL,
     )
+    if m is not None:
+        return m.group(1).strip()
+    return PRE_QUICKSTART_PLACEHOLDER
 
 
-def build_package_doc_entries(repo_root: Path, packages: list) -> list[PackageDocEntry]:
-    entries = []
-    for pkg_name, pkg_dir, _ in sorted(packages, key=lambda p: p[0]):
-        rel_readme = (pkg_dir / 'README.md').relative_to(repo_root).as_posix()
-        entries.append(PackageDocEntry(name=pkg_name, path=rel_readme))
-    return entries
+def extract_quickstart_body(
+    readme_text: str,
+) -> Optional[str]:
+    """Return repo-specific Quick Start body, if present."""
+    body = extract_h2_section_body(readme_text, 'Quick Start')
+    if body:
+        return body
+    return None
 
 
-def build_documentation_lines(
+def extract_acknowledgements_body(readme_text: str) -> Optional[str]:
+    """Return repo-specific acknowledgements body, if present."""
+    body = extract_h2_section_body(readme_text, 'Acknowledgements')
+    if body:
+        return body
+    return None
+
+
+
+
+def extract_licensing_extra_body(readme_text: str) -> str:
+    """Return repo-specific Licensing content beyond the fixed default body."""
+    license_body = (
+        'The source code in this repository is licensed under Apache-2.0, '
+        'see [LICENSE](LICENSE). Container images provided by this repository '
+        'may contain third-party software shipped with their own license terms.'
+    )
+    body = extract_h2_section_body(readme_text, 'Licensing')
+    if not body:
+        return ''
+
+    if body.strip() == license_body:
+        return ''
+
+    if body.startswith(license_body):
+        extra_lines = trim_blank_lines(body[len(license_body):].splitlines())
+        if extra_lines:
+            return '\n'.join(extra_lines)
+        return ''
+
+    return body
+
+
+def extract_repository_package_purposes(readme_text: str) -> dict[str, str]:
+    """Return manually maintained purpose text from the top-level package table."""
+    body = extract_h2_section_body(readme_text, 'Documentation')
+    if not body:
+        return {}
+
+    purposes = {}
+    in_table = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped == '| Package | Description |':
+            in_table = True
+            continue
+        if in_table and stripped.startswith('| ---'):
+            continue
+        if in_table and stripped.startswith('|'):
+            cells = split_table_row(line)
+            if len(cells) >= 2:
+                link_match = re.search(r'\[[^\]]+\]\(([^)]+)\)', cells[0])
+                key = link_match.group(1) if link_match else cells[0]
+                purposes[key] = cells[1]
+            continue
+        if in_table and stripped:
+            break
+    return purposes
+
+
+def build_package_doc_entries(
     repo_root: Path,
-    pages_url: str,
-    package_doc_entries: list[PackageDocEntry],
-) -> list[str]:
-    lines = []
-    implementation_details = repo_root / 'docs' / 'IMPLEMENTATION.md'
-    if implementation_details.exists():
-        lines.append('- [Implementation Details](./docs/IMPLEMENTATION.md)')
-    lines.append(f'- [Source Code Documentation]({pages_url})')
-    lines.append('- Package Documentation')
-    for entry in package_doc_entries:
-        lines.append(f'  - [{entry.name}]({entry.path})')
-    return lines
+    packages: list,
+    manual_purposes: dict[str, str],
+) -> list[PackageDocEntry]:
+    entries = []
+    for pkg_name, pkg_dir, pkg_description in sorted(packages, key=lambda p: p[0]):
+        rel_readme = (pkg_dir / 'README.md').relative_to(repo_root).as_posix()
+        entries.append(
+            PackageDocEntry(
+                name=pkg_name,
+                path=rel_readme,
+                description=manual_purposes.get(rel_readme, pkg_description or 'TODO: Describe the package purpose.'),
+            )
+        )
+    return entries
 
 
 def pick_quickstart_target(packages: list) -> tuple[str, str]:
@@ -643,23 +1027,35 @@ def render_top_level_readme(
     existing_readme: str,
 ) -> str:
     remote = get_origin_remote(repo_root)
-    meta = parse_github_remote(remote)
+    meta = parse_repo_remote(remote)
     intro_block = extract_intro_block(existing_readme)
+    pre_quickstart_block = extract_pre_quickstart_block(existing_readme)
     ack_body = extract_acknowledgements_body(existing_readme)
     quickstart_pkg, quickstart_launch_file = pick_quickstart_target(packages)
-    package_doc_entries = build_package_doc_entries(repo_root, packages)
-    documentation_lines = build_documentation_lines(repo_root, meta.pages_url, package_doc_entries)
+    repository_package_purposes = extract_repository_package_purposes(existing_readme)
+    quickstart_body = extract_quickstart_body(existing_readme)
+    package_doc_entries = build_package_doc_entries(
+        repo_root,
+        packages,
+        repository_package_purposes,
+    )
+    licensing_extra_body = extract_licensing_extra_body(existing_readme)
     context = TopLevelTemplateContext(
+        title=meta.repo,
         repo_name=meta.repo,
         owner=meta.owner,
+        owner_lower=meta.owner_lower,
+        provider=meta.provider,
         pages_url=meta.pages_url,
         repo_https_url=meta.repo_https_url,
         container_image=meta.container_image,
-        badges_block=render_badges(meta),
         intro_block=intro_block,
+        pre_quickstart_block=pre_quickstart_block,
+        quickstart_body=quickstart_body,
         quickstart_package=quickstart_pkg,
         quickstart_launch_file=quickstart_launch_file,
-        documentation_lines=documentation_lines,
+        repository_packages=package_doc_entries,
+        licensing_extra_body=licensing_extra_body,
         acknowledgements_body=ack_body,
     )
     rendered = render_template(
@@ -675,7 +1071,7 @@ def render_top_level_readme(
 # ---------------------------------------------------------------------------
 
 def main():
-    repo_root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent.parent
+    repo_root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[2]
     try:
         template_env = build_template_environment()
     except RuntimeError as exc:
@@ -687,6 +1083,11 @@ def main():
         print('Warning: no ROS packages found.', file=sys.stderr)
 
     for pkg_name, pkg_dir, pkg_description in packages:
+        readme_path = pkg_dir / 'README.md'
+        old_content = readme_path.read_text() if readme_path.exists() else ''
+        pkg_description = extract_package_description(old_content, pkg_description)
+        manual_descriptions = extract_manual_descriptions(old_content)
+        manual_node_texts = extract_manual_node_texts(old_content)
         msgs = find_interface_files(pkg_dir, 'msg', 'msg')
         srvs = find_interface_files(pkg_dir, 'srv', 'srv')
         actions = find_interface_files(pkg_dir, 'action', 'action')
@@ -698,13 +1099,37 @@ def main():
 
         if msgs:
             entries = [(f'{pkg_name}/msg/{f.stem}', f.relative_to(pkg_dir)) for f in msgs]
-            sections.append(PackageSection(title='Messages', body=md_interface_table(entries)))
+            sections.append(PackageSection(
+                title='Messages',
+                kind='interface_table',
+                interface_entries=build_interface_definition_entries(
+                    entries,
+                    manual_descriptions,
+                    ('Messages',),
+                ),
+            ))
         if srvs:
             entries = [(f'{pkg_name}/srv/{f.stem}', f.relative_to(pkg_dir)) for f in srvs]
-            sections.append(PackageSection(title='Services', body=md_interface_table(entries)))
+            sections.append(PackageSection(
+                title='Services',
+                kind='interface_table',
+                interface_entries=build_interface_definition_entries(
+                    entries,
+                    manual_descriptions,
+                    ('Services',),
+                ),
+            ))
         if actions:
             entries = [(f'{pkg_name}/action/{f.stem}', f.relative_to(pkg_dir)) for f in actions]
-            sections.append(PackageSection(title='Actions', body=md_interface_table(entries)))
+            sections.append(PackageSection(
+                title='Actions',
+                kind='interface_table',
+                interface_entries=build_interface_definition_entries(
+                    entries,
+                    manual_descriptions,
+                    ('Actions',),
+                ),
+            ))
 
         if node_sources or launch_files:
             headers = find_headers(pkg_dir)
@@ -720,32 +1145,39 @@ def main():
                     service_servers=extract_service_servers(source, type_aliases),
                     action_servers=extract_action_servers(source, type_aliases),
                     action_clients=extract_action_clients(source, type_aliases),
-                    parameters=resolve_parameters(extract_raw_parameters(source), member_var_map),
+                    parameters=resolve_parameters(extract_raw_parameters(source), member_var_map, build_enum_value_map(headers)),
                 )
                 nodes.append(node)
 
             if nodes:
-                node_parts = []
-                for idx, node in enumerate(nodes):
-                    if idx > 0:
-                        node_parts.append('')
-                    node_parts.append(render_node(node))
-                sections.append(PackageSection(title='Nodes', body='\n'.join(node_parts)))
+                sections.append(
+                    PackageSection(
+                        title='Nodes',
+                        kind='nodes',
+                        nodes=[
+                            build_node_context(node, manual_descriptions, manual_node_texts)
+                            for node in nodes
+                        ],
+                    )
+                )
 
             if launch_files:
                 sections.append(
-                    PackageSection(title='Launch Files', body=render_launch_files(launch_files, pkg_dir))
+                    PackageSection(
+                        title='Launch Files',
+                        kind='launch_files',
+                        launch_files=build_launch_file_contexts(
+                            launch_files,
+                            pkg_dir,
+                            manual_descriptions,
+                        ),
+                    )
                 )
 
-        toc = render_toc([node.node_name for node in nodes], bool(launch_files))
-        toc_lines = toc.splitlines() if toc else []
-        readme_path = pkg_dir / 'README.md'
-        old_content = readme_path.read_text() if readme_path.exists() else ''
         new_content = render_package_readme(
             template_env=template_env,
             package_name=pkg_name,
             package_description=pkg_description,
-            toc_lines=toc_lines,
             sections=sections,
         )
         readme_path.write_text(new_content)
