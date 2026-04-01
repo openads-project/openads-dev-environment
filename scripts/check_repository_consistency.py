@@ -1067,6 +1067,27 @@ def check_no_top_level_package_xml(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_repository_name_not_ending_with_er(ctx: CheckContext) -> CheckResult:
+    repo_name = ctx.repo_root.name
+
+    if repo_name.endswith("er"):
+        return CheckResult(
+            check_id="repository_name_not_ending_with_er",
+            name='Repository name does not end with "er"',
+            passed=False,
+            message='Repository name ends with "er"; prefer activity/object naming such as trajectory_optimization',
+            details=[repo_name],
+        )
+
+    return CheckResult(
+        check_id="repository_name_not_ending_with_er",
+        name='Repository name does not end with "er"',
+        passed=True,
+        message='Repository name does not end with "er"',
+        details=[],
+    )
+
+
 def check_top_level_license_apache2(ctx: CheckContext) -> CheckResult:
     license_path = ctx.repo_root / "LICENSE"
     if not license_path.is_file():
@@ -1687,6 +1708,10 @@ def check_generated_readmes_have_no_todo(ctx: CheckContext) -> CheckResult:
 
 CHECKS: dict[str, tuple[str, CheckFn]] = {
     "no_top_level_package_xml": ("No top-level package.xml", check_no_top_level_package_xml),
+    "repository_name_not_ending_with_er": (
+        'Repository name does not end with "er"',
+        check_repository_name_not_ending_with_er,
+    ),
     "top_level_license_apache2": (
         'Top-level "LICENSE" with Apache 2.0',
         check_top_level_license_apache2,

@@ -158,6 +158,7 @@ Use [`check_repository_consistency.py`](scripts/check_repository_consistency.py)
 | `dev_environment_at_remote_main` | Passes when `.openads-dev-environment` is present as a git repository and its current `HEAD` exactly matches `origin/main`. Update the submodule if it points to any other commit. |
 | `generated_readmes_have_no_todo` | Passes when the repository top-level `README.md` and every generated package `README.md` contain no `TODO` placeholders. Replace all remaining placeholder text before committing. |
 | `no_top_level_package_xml` | Passes when the repository root does not contain a `package.xml`. ROS packages must live in subdirectories instead of treating the whole repository as one package. |
+| `repository_name_not_ending_with_er` | Passes when the repository directory name does not end with `er`, enforcing names such as `trajectory_optimization` instead of `trajectory_optimizer`. |
 | `readme_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_readme.py` produces no README content changes and no additional git status changes. Re-run the generator and commit the result until a second run is clean. |
 | `required_root_ci_workflows` | Passes when `.github/workflows/` contains `docker-ros.yml`, `docs.yml`, and `consistency.yml`. |
 | `required_top_level_symlinks` | Passes when the repository root contains symlinks `.devcontainer -> .openads-dev-environment/.devcontainer/`, `.vscode -> .openads-dev-environment/.vscode/`, and `.pre-commit-config.yaml -> .openads-dev-environment/.pre-commit-config.yaml`. |
