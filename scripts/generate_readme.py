@@ -15,6 +15,7 @@ import difflib
 import re
 import subprocess
 import sys
+from codecs import decode as codecs_decode
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -328,13 +329,232 @@ def extract_service_servers(source: str, aliases: dict) -> list:
     ]
 
 
+def find_cpp_call_bodies(source: str, function_name: str) -> list[str]:
+    """Return the argument body of each function call, excluding declarations/definitions."""
+    bodies = []
+    pattern = re.compile(rf'(?<!::)\b{re.escape(function_name)}\s*\(')
+
+    for match in pattern.finditer(source):
+        start = match.end()
+        depth = 1
+        i = start
+        in_string = False
+        in_char = False
+        in_line_comment = False
+        in_block_comment = False
+        escaped = False
+
+        while i < len(source) and depth > 0:
+            char = source[i]
+            next_char = source[i + 1] if i + 1 < len(source) else ''
+
+            if in_line_comment:
+                if char == '\n':
+                    in_line_comment = False
+                i += 1
+                continue
+
+            if in_block_comment:
+                if char == '*' and next_char == '/':
+                    in_block_comment = False
+                    i += 2
+                else:
+                    i += 1
+                continue
+
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                i += 1
+                continue
+
+            if in_char:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == "'":
+                    in_char = False
+                i += 1
+                continue
+
+            if char == '/' and next_char == '/':
+                in_line_comment = True
+                i += 2
+                continue
+
+            if char == '/' and next_char == '*':
+                in_block_comment = True
+                i += 2
+                continue
+
+            if char == '"':
+                in_string = True
+                i += 1
+                continue
+
+            if char == "'":
+                in_char = True
+                i += 1
+                continue
+
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+
+            i += 1
+
+        if depth == 0:
+            bodies.append(source[start:i - 1])
+
+    return bodies
+
+
+def split_cpp_arguments(call_body: str) -> list[str]:
+    """Split a C++ call body into top-level arguments."""
+    args = []
+    current = []
+    paren_depth = 0
+    brace_depth = 0
+    bracket_depth = 0
+    in_string = False
+    in_char = False
+    in_line_comment = False
+    in_block_comment = False
+    escaped = False
+    i = 0
+
+    while i < len(call_body):
+        char = call_body[i]
+        next_char = call_body[i + 1] if i + 1 < len(call_body) else ''
+
+        if in_line_comment:
+            current.append(char)
+            if char == '\n':
+                in_line_comment = False
+            i += 1
+            continue
+
+        if in_block_comment:
+            current.append(char)
+            if char == '*' and next_char == '/':
+                current.append(next_char)
+                in_block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if in_string:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if in_char:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == "'":
+                in_char = False
+            i += 1
+            continue
+
+        if char == '/' and next_char == '/':
+            current.extend([char, next_char])
+            in_line_comment = True
+            i += 2
+            continue
+
+        if char == '/' and next_char == '*':
+            current.extend([char, next_char])
+            in_block_comment = True
+            i += 2
+            continue
+
+        if char == '"':
+            current.append(char)
+            in_string = True
+            i += 1
+            continue
+
+        if char == "'":
+            current.append(char)
+            in_char = True
+            i += 1
+            continue
+
+        if char == '(':
+            paren_depth += 1
+        elif char == ')':
+            paren_depth -= 1
+        elif char == '{':
+            brace_depth += 1
+        elif char == '}':
+            brace_depth -= 1
+        elif char == '[':
+            bracket_depth += 1
+        elif char == ']':
+            bracket_depth -= 1
+        elif char == ',' and paren_depth == 0 and brace_depth == 0 and bracket_depth == 0:
+            args.append(''.join(current).strip())
+            current = []
+            i += 1
+            continue
+
+        current.append(char)
+        i += 1
+
+    trailing = ''.join(current).strip()
+    if trailing:
+        args.append(trailing)
+
+    return args
+
+
+def decode_cpp_string_literal(text: str) -> str:
+    """Decode the content of a regular C++ string literal."""
+    return codecs_decode(text, 'unicode_escape')
+
+
+def extract_cpp_string_expression(expr: str) -> str:
+    """Collapse adjacent C++ string literals into a single Python string."""
+    literal_pattern = re.compile(r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"', re.DOTALL)
+    literals = [decode_cpp_string_literal(match.group(1)) for match in literal_pattern.finditer(expr)]
+    if not literals:
+        return ' '.join(expr.split())
+    return ''.join(literals)
+
+
 def extract_raw_parameters(source: str) -> list:
     """Return [(param_name, member_var_name, description)] from declareAndLoadParameter calls."""
-    return [
-        (m.group(1), m.group(2), m.group(3))
-        for m in re.finditer(
-            r'declareAndLoadParameter\s*\(\s*"([^"]+)"\s*,\s*(\w+)\s*,\s*"([^"]+)"', source)
-    ]
+    params = []
+    for call_body in find_cpp_call_bodies(source, 'declareAndLoadParameter'):
+        args = split_cpp_arguments(call_body)
+        if len(args) < 3:
+            continue
+
+        name = extract_cpp_string_expression(args[0])
+        member_var_match = re.fullmatch(r'\w+', args[1].strip())
+        description = extract_cpp_string_expression(args[2])
+
+        if not name or not member_var_match:
+            continue
+
+        params.append((name, member_var_match.group(0), description))
+    return params
 
 
 def extract_python_launch_arguments(source: str) -> list:
