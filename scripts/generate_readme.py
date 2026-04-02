@@ -475,6 +475,12 @@ def render_table_cell(content: str) -> str:
     return normalized if normalized else 'TODO'
 
 
+def render_parameter_default(content: str) -> str:
+    """Render parameter defaults, using '-' when no default value exists."""
+    normalized = content.strip()
+    return normalized if normalized else '-'
+
+
 def manual_key(heading_path: tuple[str, ...], table_kind: str, row_cells: list[str]) -> tuple:
     return (
         tuple(heading_path),
@@ -665,7 +671,7 @@ def build_parameter_rows(params: list[Parameter]) -> list[Parameter]:
         Parameter(
             name=render_table_cell(param.name),
             ros_type=render_table_cell(param.ros_type),
-            default=render_table_cell(param.default),
+            default=render_parameter_default(param.default),
             description=render_table_cell(param.description),
         )
         for param in params
@@ -764,14 +770,27 @@ def print_diff(old: str, new: str, path: Path) -> None:
         sys.stderr.write(f'{color}{line}{RESET if color else ""}')
 
 
-
-
 def extract_package_description(readme_text: str, fallback: str) -> str:
-    """Return a manually maintained package intro block or the package.xml fallback."""
+    """Return package.xml description plus preserved intro content before the first H2."""
     m = re.search(r'^#\s+.+?\n\n(.*?)(?=^##\s|\Z)', readme_text, re.DOTALL | re.MULTILINE)
-    if m and m.group(1).strip():
-        return m.group(1).rstrip()
-    return fallback
+    if not m:
+        return fallback
+
+    intro_block = m.group(1).strip()
+    if not intro_block:
+        return fallback
+
+    paragraphs = re.split(r'\n\s*\n', intro_block)
+    if len(paragraphs) <= 1:
+        return fallback
+
+    preserved_tail = '\n\n'.join(paragraphs[1:]).strip()
+    if not preserved_tail:
+        return fallback
+
+    if fallback:
+        return f'{fallback}\n\n{preserved_tail}'
+    return preserved_tail
 
 
 def render_package_readme(
@@ -966,37 +985,9 @@ def extract_licensing_extra_body(readme_text: str) -> str:
     return body
 
 
-def extract_repository_package_purposes(readme_text: str) -> dict[str, str]:
-    """Return manually maintained purpose text from the top-level package table."""
-    body = extract_h2_section_body(readme_text, 'Documentation')
-    if not body:
-        return {}
-
-    purposes = {}
-    in_table = False
-    for line in body.splitlines():
-        stripped = line.strip()
-        if stripped == '| Package | Description |':
-            in_table = True
-            continue
-        if in_table and stripped.startswith('| ---'):
-            continue
-        if in_table and stripped.startswith('|'):
-            cells = split_table_row(line)
-            if len(cells) >= 2:
-                link_match = re.search(r'\[[^\]]+\]\(([^)]+)\)', cells[0])
-                key = link_match.group(1) if link_match else cells[0]
-                purposes[key] = cells[1]
-            continue
-        if in_table and stripped:
-            break
-    return purposes
-
-
 def build_package_doc_entries(
     repo_root: Path,
     packages: list,
-    manual_purposes: dict[str, str],
 ) -> list[PackageDocEntry]:
     entries = []
     for pkg_name, pkg_dir, pkg_description in sorted(packages, key=lambda p: p[0]):
@@ -1005,7 +996,7 @@ def build_package_doc_entries(
             PackageDocEntry(
                 name=pkg_name,
                 path=rel_readme,
-                description=manual_purposes.get(rel_readme, pkg_description or 'TODO: Describe the package purpose.'),
+                description=pkg_description or 'TODO: Describe the package purpose.',
             )
         )
     return entries
@@ -1032,12 +1023,10 @@ def render_top_level_readme(
     pre_quickstart_block = extract_pre_quickstart_block(existing_readme)
     ack_body = extract_acknowledgements_body(existing_readme)
     quickstart_pkg, quickstart_launch_file = pick_quickstart_target(packages)
-    repository_package_purposes = extract_repository_package_purposes(existing_readme)
     quickstart_body = extract_quickstart_body(existing_readme)
     package_doc_entries = build_package_doc_entries(
         repo_root,
         packages,
-        repository_package_purposes,
     )
     licensing_extra_body = extract_licensing_extra_body(existing_readme)
     context = TopLevelTemplateContext(

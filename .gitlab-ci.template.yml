@@ -14,7 +14,7 @@ docker-ros:
     TARGET: dev,run
     BASE_IMAGE: rwthika/ros2:jazzy
     RMW_IMPLEMENTATION: rmw_zenoh_cpp
-    COMMAND: ros2 launch my_package my_launch_file.launch.py
+    COMMAND: "echo 'TODO: no command set'"
     ENABLE_INDUSTRIAL_CI: 'true'
     TARGET_CMAKE_ARGS: '-DCMAKE_EXPORT_COMPILE_COMMANDS=1'
 

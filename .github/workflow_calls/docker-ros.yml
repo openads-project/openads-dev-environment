@@ -19,7 +19,7 @@ jobs:
           target: dev,run
           base-image: rwthika/ros2:jazzy
           rmw-implementation: rmw_zenoh_cpp
-          command: ros2 launch my_package my_launch_file.launch.py
+          command: "echo 'TODO: no command set'"
           enable-industrial-ci: true
         env:
           TARGET_CMAKE_ARGS: -DCMAKE_EXPORT_COMPILE_COMMANDS=1
