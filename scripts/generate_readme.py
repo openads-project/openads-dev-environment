@@ -475,6 +475,12 @@ def render_table_cell(content: str) -> str:
     return normalized if normalized else 'TODO'
 
 
+def render_parameter_default(content: str) -> str:
+    """Render parameter defaults, using '-' when no default value exists."""
+    normalized = content.strip()
+    return normalized if normalized else '-'
+
+
 def manual_key(heading_path: tuple[str, ...], table_kind: str, row_cells: list[str]) -> tuple:
     return (
         tuple(heading_path),
@@ -665,7 +671,7 @@ def build_parameter_rows(params: list[Parameter]) -> list[Parameter]:
         Parameter(
             name=render_table_cell(param.name),
             ros_type=render_table_cell(param.ros_type),
-            default=render_table_cell(param.default),
+            default=render_parameter_default(param.default),
             description=render_table_cell(param.description),
         )
         for param in params
