@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Institute for Automotive Engineering (ika), RWTH Aachen University
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Auto-generates ROS2 interface documentation (topics, actions, parameters)
 by parsing C++ source files in a ROS2 repository and writing full package
