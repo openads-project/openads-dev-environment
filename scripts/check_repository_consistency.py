@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Institute for Automotive Engineering (ika), RWTH Aachen University
+# SPDX-License-Identifier: Apache-2.0
+
 """Repository consistency checks.
 
 Usage:
