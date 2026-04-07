@@ -1710,6 +1710,46 @@ def check_generated_readmes_have_no_todo(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_docker_ros_ci_has_no_todo(ctx: CheckContext) -> CheckResult:
+    candidate_paths = [
+        ctx.repo_root / ".github" / "workflows" / "docker-ros.yml",
+        ctx.repo_root / ".gitlab-ci.yml",
+    ]
+
+    present_paths = [path for path in candidate_paths if path.is_file()]
+    if not present_paths:
+        return CheckResult(
+            check_id="docker_ros_ci_has_no_todo",
+            name='docker-ros CI files contain no "TODO"',
+            passed=True,
+            message="No root docker-ros CI files found to validate",
+            details=[],
+        )
+
+    offenders: list[str] = []
+    for path in present_paths:
+        rel_path = path.relative_to(ctx.repo_root).as_posix()
+        todo_lines = find_todo_lines(path)
+        offenders.extend(f"{rel_path}:{line}" for line in todo_lines)
+
+    if offenders:
+        return CheckResult(
+            check_id="docker_ros_ci_has_no_todo",
+            name='docker-ros CI files contain no "TODO"',
+            passed=False,
+            message='Found "TODO" placeholder text in root docker-ros CI files',
+            details=sorted(offenders),
+        )
+
+    return CheckResult(
+        check_id="docker_ros_ci_has_no_todo",
+        name='docker-ros CI files contain no "TODO"',
+        passed=True,
+        message='Root docker-ros CI files contain no "TODO" placeholder text',
+        details=[],
+    )
+
+
 CHECKS: dict[str, tuple[str, CheckFn]] = {
     "no_top_level_package_xml": ("No top-level package.xml", check_no_top_level_package_xml),
     "repository_name_not_ending_with_er": (
@@ -1775,6 +1815,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "generated_readmes_have_no_todo": (
         'Top-level and generated package READMEs contain no "TODO"',
         check_generated_readmes_have_no_todo,
+    ),
+    "docker_ros_ci_has_no_todo": (
+        'docker-ros CI files contain no "TODO"',
+        check_docker_ros_ci_has_no_todo,
     ),
 }
 
