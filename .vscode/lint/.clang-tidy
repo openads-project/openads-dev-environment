@@ -5,8 +5,11 @@ Checks: >
   clang-analyzer-*,
   cppcoreguidelines-*,
   -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-pro-type-member-init,
   google-*,
   -google-runtime-references,
+  -google-readability-todo,
   readability-*
   -readability-magic-numbers,
   -readability-implicit-bool-conversion,
