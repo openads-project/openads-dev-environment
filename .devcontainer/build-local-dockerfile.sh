@@ -103,6 +103,16 @@ generate_docker_ros_env_file() {
                 return value
             }
 
+            function normalize_env_value(value, quote) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                quote = sprintf("%c", 39)
+                if (value ~ /^".*"$/ || value ~ ("^" quote ".*" quote "$")) {
+                    value = substr(value, 2, length(value) - 2)
+                }
+                return value
+            }
+
             BEGIN {
                 in_with = 0
                 with_indent = -1
@@ -146,6 +156,7 @@ generate_docker_ros_env_file() {
                 if (key == "TARGET" || key == "PLATFORM") {
                     next
                 }
+                value = normalize_env_value(value)
                 value = escape_env_value(value)
 
                 printf "%s=\"%s\"\n", key, value
@@ -170,6 +181,16 @@ generate_docker_ros_env_file() {
             function escape_env_value(value) {
                 gsub(/\\/, "\\\\", value)
                 gsub(/"/, "\\\"", value)
+                return value
+            }
+
+            function normalize_env_value(value, quote) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                quote = sprintf("%c", 39)
+                if (value ~ /^".*"$/ || value ~ ("^" quote ".*" quote "$")) {
+                    value = substr(value, 2, length(value) - 2)
+                }
                 return value
             }
 
@@ -233,6 +254,7 @@ generate_docker_ros_env_file() {
                     next
                 }
 
+                value = normalize_env_value(value)
                 value = escape_env_value(value)
                 printf "%s=\"%s\"\n", key, value
                 entry_count++
@@ -267,6 +289,7 @@ build_with_docker_ros() {
     local env_file=".env"
     local env_backup=".env.devcontainer.bak"
     local env_had_file=false
+    local host_platform
 
     # clone docker-ros on-demand if not already available
     if [[ ! -d "${docker_ros_dir}" ]]; then
