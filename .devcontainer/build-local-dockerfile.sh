@@ -75,80 +75,184 @@ use_local_build() {
     [[ "${value}" == "1" || "${value}" == "true" || "${value}" == "yes" || "${value}" == "on" ]]
 }
 
+resolve_host_platform() {
+    case "$(uname -m)" in
+        x86_64|amd64)
+            printf 'amd64\n'
+            ;;
+        aarch64|arm64)
+            printf 'arm64\n'
+            ;;
+        *)
+            printf 'Unsupported host architecture for PLATFORM: %s\n' "$(uname -m)" >&2
+            return 1
+            ;;
+    esac
+}
+
 generate_docker_ros_env_file() {
     local output_file="$1"
     local workflow_file=".github/workflows/docker-ros.yml"
+    local gitlab_ci_file=".gitlab-ci.yml"
 
-    if [[ ! -f "${workflow_file}" ]]; then
-        echo "docker-ros workflow file '${workflow_file}' not found" >&2
-        return 1
-    fi
+    if [[ -f "${workflow_file}" ]]; then
+        if awk '
+            function escape_env_value(value) {
+                gsub(/\\/, "\\\\", value)
+                gsub(/"/, "\\\"", value)
+                return value
+            }
 
-    if ! awk '
-        function escape_env_value(value) {
-            gsub(/\\/, "\\\\", value)
-            gsub(/"/, "\\\"", value)
-            return value
-        }
+            BEGIN {
+                in_with = 0
+                with_indent = -1
+                entry_count = 0
+            }
 
-        BEGIN {
-            in_with = 0
-            with_indent = -1
-            entry_count = 0
-        }
+            {
+                line = $0
 
-        {
-            line = $0
-
-            if (!in_with) {
-                if (line ~ /^[[:space:]]*with:[[:space:]]*$/) {
-                    match(line, /[^[:space:]]/)
-                    with_indent = RSTART - 1
-                    in_with = 1
+                if (!in_with) {
+                    if (line ~ /^[[:space:]]*with:[[:space:]]*$/) {
+                        match(line, /[^[:space:]]/)
+                        with_indent = RSTART - 1
+                        in_with = 1
+                    }
+                    next
                 }
-                next
+
+                if (line ~ /^[[:space:]]*$/) {
+                    next
+                }
+
+                match(line, /[^[:space:]]/)
+                indent = RSTART - 1
+                if (indent <= with_indent) {
+                    exit
+                }
+                if (indent != with_indent + 2) {
+                    next
+                }
+
+                entry = line
+                sub(/^[[:space:]]+/, "", entry)
+                key = entry
+                sub(/:.*/, "", key)
+                value = entry
+                sub(/^[^:]+:[[:space:]]*/, "", value)
+
+                gsub(/-/, "_", key)
+                key = toupper(key)
+                if (key == "TARGET" || key == "PLATFORM") {
+                    next
+                }
+                value = escape_env_value(value)
+
+                printf "%s=\"%s\"\n", key, value
+                entry_count++
             }
 
-            if (line ~ /^[[:space:]]*$/) {
-                next
+            END {
+                if (entry_count == 0) {
+                    exit 1
+                }
             }
+        ' "${workflow_file}" > "${output_file}"; then
+            return 0
+        fi
 
-            match(line, /[^[:space:]]/)
-            indent = RSTART - 1
-            if (indent <= with_indent) {
-                exit
-            }
-            if (indent != with_indent + 2) {
-                next
-            }
-
-            entry = line
-            sub(/^[[:space:]]+/, "", entry)
-            key = entry
-            sub(/:.*/, "", key)
-            value = entry
-            sub(/^[^:]+:[[:space:]]*/, "", value)
-
-            gsub(/-/, "_", key)
-            key = toupper(key)
-            if (key == "TARGET") {
-                next
-            }
-            value = escape_env_value(value)
-
-            printf "%s=\"%s\"\n", key, value
-            entry_count++
-        }
-
-        END {
-            if (entry_count == 0) {
-                exit 1
-            }
-        }
-    ' "${workflow_file}" > "${output_file}"; then
         echo "Failed to generate docker-ros env file from '${workflow_file}'" >&2
         return 1
     fi
+
+    if [[ -f "${gitlab_ci_file}" ]]; then
+        if awk '
+            function escape_env_value(value) {
+                gsub(/\\/, "\\\\", value)
+                gsub(/"/, "\\\"", value)
+                return value
+            }
+
+            BEGIN {
+                in_job = 0
+                in_variables = 0
+                job_indent = -1
+                variables_indent = -1
+                entry_count = 0
+            }
+
+            {
+                line = $0
+
+                if (line ~ /^[[:space:]]*#/) {
+                    next
+                }
+
+                if (!in_job) {
+                    if (line ~ /^docker-ros:[[:space:]]*$/) {
+                        in_job = 1
+                        job_indent = 0
+                    }
+                    next
+                }
+
+                if (line ~ /^[[:space:]]*$/) {
+                    next
+                }
+
+                match(line, /[^[:space:]]/)
+                indent = RSTART - 1
+
+                if (indent <= job_indent && line !~ /^docker-ros:[[:space:]]*$/) {
+                    exit
+                }
+
+                if (!in_variables) {
+                    if (indent == job_indent + 2 && line ~ /^[[:space:]]*variables:[[:space:]]*$/) {
+                        in_variables = 1
+                        variables_indent = indent
+                    }
+                    next
+                }
+
+                if (indent <= variables_indent) {
+                    exit
+                }
+                if (indent != variables_indent + 2) {
+                    next
+                }
+
+                entry = line
+                sub(/^[[:space:]]+/, "", entry)
+                key = entry
+                sub(/:.*/, "", key)
+                value = entry
+                sub(/^[^:]+:[[:space:]]*/, "", value)
+
+                if (key == "TARGET" || key == "PLATFORM") {
+                    next
+                }
+
+                value = escape_env_value(value)
+                printf "%s=\"%s\"\n", key, value
+                entry_count++
+            }
+
+            END {
+                if (entry_count == 0) {
+                    exit 1
+                }
+            }
+        ' "${gitlab_ci_file}" > "${output_file}"; then
+            return 0
+        fi
+
+        echo "Failed to generate docker-ros env file from '${gitlab_ci_file}'" >&2
+        return 1
+    fi
+
+    echo "Neither '${workflow_file}' nor '${gitlab_ci_file}' is available for docker-ros env generation" >&2
+    return 1
 }
 
 # helper function to build image locally with docker-ros
@@ -189,6 +293,10 @@ build_with_docker_ros() {
     if ! generate_docker_ros_env_file "${env_file}"; then
         return 1
     fi
+    if ! host_platform="$(resolve_host_platform)"; then
+        return 1
+    fi
+    printf "PLATFORM=\"%s\"\n" "${host_platform}" >> "${env_file}"
     printf "TARGET=\"dev\"\n" >> "${env_file}"
     printf "\nIMAGE=\"%s\"\n" "${image}" >> "${env_file}"
 
