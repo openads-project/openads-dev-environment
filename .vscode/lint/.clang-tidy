@@ -2,7 +2,6 @@
 Checks: >
   -*,
   clang-diagnostic-*,
-  -clang-diagnostic-gnu-zero-variadic-macro-arguments,
   clang-analyzer-*,
   cppcoreguidelines-*,
   -cppcoreguidelines-avoid-magic-numbers,
@@ -11,7 +10,6 @@ Checks: >
   -cppcoreguidelines-pro-type-member-init,
   google-*,
   -google-build-using-namespace,
-  -google-readability-todo,
   -google-runtime-references,
   readability-*
   -readability-implicit-bool-conversion,
