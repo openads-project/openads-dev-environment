@@ -20,7 +20,7 @@ mapping:
   outlook.com: Personal
   live.com: Personal
   me.com: Personal
-  users.noreply.github.com: GitHub (noreply)
+  users.noreply.github.com: GitHub
 
 # Global chart options (all optional, can be overridden via CLI flags).
 options:

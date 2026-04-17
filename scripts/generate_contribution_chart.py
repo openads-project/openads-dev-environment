@@ -180,7 +180,6 @@ def build_chart(
     )
 
     # Replace text labels with logos where available, scaled by segment fraction
-    import math
     from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 
     max_zoom = 0.18
@@ -192,11 +191,15 @@ def build_chart(
         logo_img = read_logo_image(logo_file)
         fraction = size / total
         zoom = min_zoom + (max_zoom - min_zoom) * min(fraction / 0.5, 1.0)
-        # Position the logo where the text label was
+        # Position the logo above the text label and show commit count below
         x, y = text.get_position()
-        text.set_visible(False)
+        logo_offset = 0.15
+        logo_x = x + logo_offset
+        logo_y = y + logo_offset
+        text.set_text(f"({size} Commits)")
+        text.set_fontsize(8)
         im = OffsetImage(logo_img, zoom=zoom)
-        ab = AnnotationBbox(im, (x, y), frameon=False, box_alignment=(0.5, 0.5))
+        ab = AnnotationBbox(im, (logo_x, logo_y), frameon=False, box_alignment=(0.5, 0.5))
         ax.add_artist(ab)
 
     ax.set_title(title, fontsize=14, fontweight="bold", pad=20)
