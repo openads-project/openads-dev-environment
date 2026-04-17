@@ -36,7 +36,7 @@ jobs:
           pip install matplotlib pyyaml cairosvg
           python .openads-dev-environment/scripts/generate_contribution_chart.py \
             --repo . \
-            --mapping .openads-dev-environment/scripts/contribution_mapping.yml \
+            --mapping .openads-dev-environment/scripts/contributor_mapping.yml \
             --output docs/contribution_chart.png \
             --title "Contributions by Organization"
       - name: Run Doxygen
