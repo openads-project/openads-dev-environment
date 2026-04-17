@@ -10,6 +10,9 @@
 #     logo: path/to/logo.png           (relative to this file or absolute)
 
 mapping:
+  ika.rwth-aachen.de:
+    name: ika - RWTH Aachen
+    logo: "https://www.ika.rwth-aachen.de/images/ika-logo-a-blau-blau-rgb.svg"
   rwth-aachen.de:
     name: RWTH Aachen
     logo: "https://www.total-e-quality.de/media/cache/39/75/39756addcf88e36b6616a28b4bfb278a.png"
