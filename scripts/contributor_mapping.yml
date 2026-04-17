@@ -1,0 +1,28 @@
+# Mapping of email hosts to organization names and optional logos.
+# The script extracts the domain from each committer's email and looks it up here.
+# Subdomain matching is supported: "ika.rwth-aachen.de" also matches
+# "xyz.ika.rwth-aachen.de".
+#
+# Each entry can be either:
+#   host: Organization Name            (simple string)
+#   host:                               (dict with name + optional logo)
+#     name: Organization Name
+#     logo: path/to/logo.png           (relative to this file or absolute)
+
+mapping:
+  rwth-aachen.de:
+    name: RWTH Aachen
+    logo: "https://www.total-e-quality.de/media/cache/39/75/39756addcf88e36b6616a28b4bfb278a.png"
+  gmail.com: Personal
+  outlook.com: Personal
+  live.com: Personal
+  me.com: Personal
+  users.noreply.github.com: GitHub (noreply)
+
+# Global chart options (all optional, can be overridden via CLI flags).
+options:
+  title: Contributions by Organization
+  min_percent: 2.0          # Slices below this percentage are grouped into "Other"
+  output: contribution_chart.png
+  figsize_w: 8
+  figsize_h: 6
