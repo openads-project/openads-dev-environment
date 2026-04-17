@@ -162,7 +162,7 @@ def build_chart(
 
     # Build label strings with counts
     display_labels = [
-        f"{label}"
+        f"{label}\n({size} Commits)"
         for label, size in zip(labels, sizes)
     ]
 
