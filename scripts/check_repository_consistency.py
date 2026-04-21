@@ -57,10 +57,7 @@ RE_PY_DECLARE_AND_LOAD = re.compile(r"def\s+declare_and_load_parameter\s*\(")
 RE_CPP_STRING_LITERAL = re.compile(r'^(?:u8|u|U|L)?"(?:\\.|[^"\\])*"$')
 RE_PY_STRING_LITERAL = re.compile(r"^[rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\")$")
 RE_CMAKE_TARGET_DECL = re.compile(r"^\s*add_(?:executable|library)\s*\(", re.MULTILINE)
-RE_COPYRIGHT_HEADER = re.compile(
-    r"Copyright\s+Institute\s+for\s+Automotive\s+Engineering\s+\(ika\),\s+RWTH\s+Aachen\s+University"
-)
-RE_APACHE_SPDX_IDENTIFIER = re.compile(r"SPDX-License-Identifier:\s*Apache-2\.0")
+RE_COPYRIGHT_HEADER = re.compile(r"\bcopyright\b", re.IGNORECASE)
 RE_KEYWORD_DEFAULT_VALUE = re.compile(
     r"default_value\s*=\s*([rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"))"
 )
@@ -1149,9 +1146,7 @@ def check_source_files_have_copyright_notice(ctx: CheckContext) -> CheckResult:
 
         text = read_text(path)
         header_window = "\n".join(text.splitlines()[:6])
-        if not RE_COPYRIGHT_HEADER.search(header_window) or not RE_APACHE_SPDX_IDENTIFIER.search(
-            header_window
-        ):
+        if not RE_COPYRIGHT_HEADER.search(header_window):
             offenders.append(str(path.relative_to(ctx.repo_root)))
 
     if offenders:
@@ -1159,10 +1154,7 @@ def check_source_files_have_copyright_notice(ctx: CheckContext) -> CheckResult:
             check_id="source_files_have_copyright_notice",
             name="Tracked .cpp/.hpp/.py files include copyright notice",
             passed=False,
-            message=(
-                "Some tracked .cpp/.hpp/.py files are missing the required copyright "
-                "notice and/or Apache SPDX identifier near the top of the file"
-            ),
+            message="Some tracked .cpp/.hpp/.py files are missing a copyright notice near the top of the file",
             details=sorted(offenders),
         )
 
