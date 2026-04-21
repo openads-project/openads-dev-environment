@@ -1378,6 +1378,9 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
         ".vscode": ".openads-dev-environment/.vscode/",
         ".pre-commit-config.yaml": ".openads-dev-environment/.pre-commit-config.yaml",
     }
+    
+    # Items that can be either directories or symlinks (to allow custom configurations)
+    allow_directory = {".devcontainer", ".vscode"}
 
     errors: list[str] = []
 
@@ -1388,8 +1391,17 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
             errors.append(f"{link_name}: missing")
             continue
 
+        # Allow directories for .vscode and .devcontainer (custom configurations)
+        if link_name in allow_directory:
+            if link_path.is_dir() and not link_path.is_symlink():
+                # Regular directory exists, that's OK for these items
+                continue
+
         if not link_path.is_symlink():
-            errors.append(f"{link_name}: exists but is not a symlink")
+            if link_name in allow_directory:
+                errors.append(f"{link_name}: exists but is neither a directory nor a symlink")
+            else:
+                errors.append(f"{link_name}: exists but is not a symlink")
             continue
 
         actual_target = os.readlink(link_path)
@@ -1403,17 +1415,17 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
     if errors:
         return CheckResult(
             check_id="required_top_level_symlinks",
-            name="Required top-level symlinks",
+            name="Required top-level symlinks/directories",
             passed=False,
-            message="Required top-level symlinks are missing or incorrect",
+            message="Required top-level symlinks/directories are missing or incorrect",
             details=errors,
         )
 
     return CheckResult(
         check_id="required_top_level_symlinks",
-        name="Required top-level symlinks",
+        name="Required top-level symlinks/directories",
         passed=True,
-        message="All required top-level symlinks exist with expected targets",
+        message="All required top-level symlinks/directories exist correctly",
         details=[],
     )
 
@@ -1785,7 +1797,7 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
         check_default_launch_remappable_topics_cover_node_pubsub,
     ),
     "required_top_level_symlinks": (
-        "Required top-level symlinks",
+        "Required top-level symlinks/directories",
         check_required_top_level_symlinks,
     ),
     "required_root_ci_workflows": (
