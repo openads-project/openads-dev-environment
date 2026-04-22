@@ -1111,7 +1111,10 @@ def parse_repo_remote(remote: str) -> RepoMetadata:
     provider = 'github' if host.lower() == 'github.com' else 'other'
     repo_https_url = f'https://{host}/{path}'
 
-    pages_url = f'https://openads-project.github.io/{repo}'
+    pages_url = 'TODO'
+    if provider == 'github':
+        pages_url = f'https://{owner_lower}.github.io/{repo}'
+
     container_image = 'TODO'
     if provider == 'github':
         container_image = f'ghcr.io/{owner_lower}/{repo}:latest'
