@@ -1682,6 +1682,44 @@ def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_compose_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
+    generator_script = ctx.repo_root / ".openads-dev-environment" / "scripts" / "generate_compose.py"
+    if not generator_script.exists():
+        return CheckResult(
+            check_id="compose_generator_is_idempotent",
+            name="Docker Compose generator output is up to date",
+            passed=False,
+            message="Docker Compose generator script is missing",
+            details=[str(generator_script)],
+        )
+
+    run_result = run_command(
+        [sys.executable, str(generator_script), "--check", str(ctx.repo_root)],
+        cwd=ctx.repo_root,
+    )
+    if run_result.returncode != 0:
+        details: list[str] = [f"exit code: {run_result.returncode}"]
+        if run_result.stderr.strip():
+            details.append(f"stderr: {run_result.stderr.strip()}")
+        if run_result.stdout.strip():
+            details.append(f"stdout: {run_result.stdout.strip()}")
+        return CheckResult(
+            check_id="compose_generator_is_idempotent",
+            name="Docker Compose generator output is up to date",
+            passed=False,
+            message="Docker Compose file is not generated from the current launch metadata",
+            details=details,
+        )
+
+    return CheckResult(
+        check_id="compose_generator_is_idempotent",
+        name="Docker Compose generator output is up to date",
+        passed=True,
+        message="Docker Compose file matches generator output",
+        details=[],
+    )
+
+
 def check_generated_readmes_have_no_todo(ctx: CheckContext) -> CheckResult:
     offenders: list[str] = []
 
@@ -1771,6 +1809,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "readme_generator_is_idempotent": (
         "README generator produces no git changes",
         check_readme_generator_is_idempotent,
+    ),
+    "compose_generator_is_idempotent": (
+        "Docker Compose generator output is up to date",
+        check_compose_generator_is_idempotent,
     ),
     "generated_readmes_have_no_todo": (
         'Top-level and generated package READMEs contain no "TODO"',
