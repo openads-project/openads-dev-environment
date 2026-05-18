@@ -209,17 +209,68 @@ def command_argument_names(launch_data: LaunchData) -> list[str]:
     return [name for name in names if name in sorted_launch_arguments(launch_data)]
 
 
-def topic_environment_lines(launch_data: LaunchData) -> tuple[list[str], list[str]]:
+def strip_markdown_code(value: str) -> str:
+    value = value.strip()
+    if value.startswith("`") and value.endswith("`") and len(value) >= 2:
+        return value[1:-1]
+    return value
+
+
+def extract_readme_topic_directions(package_readme: Path) -> dict[str, str]:
+    if not package_readme.is_file():
+        return {}
+
+    directions: dict[str, str] = {}
+    current_direction: str | None = None
+    for line in package_readme.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped == "#### Subscribed Topics":
+            current_direction = "input"
+            continue
+        if stripped == "#### Published Topics":
+            current_direction = "output"
+            continue
+        if stripped.startswith("#### "):
+            current_direction = None
+            continue
+        if current_direction is None or not stripped.startswith("|"):
+            continue
+
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) < 3 or cells[0] in {"Topic", "---"}:
+            continue
+        topic = strip_markdown_code(cells[0])
+        existing_direction = directions.get(topic)
+        if existing_direction is not None and existing_direction != current_direction:
+            directions[topic] = "other"
+            continue
+        directions[topic] = current_direction
+
+    return directions
+
+
+def topic_environment_lines(launch_data: LaunchData, package_readme: Path) -> tuple[list[str], list[str], list[str]]:
     arguments = sorted_launch_arguments(launch_data)
-    topics = [arguments[name] for name in launch_data.remappable_topic_names if name in arguments]
-    if not topics:
-        return [], []
-    if len(topics) == 1:
-        return [f"      {env_name(topics[0].name)}: {topics[0].default_value}"], []
-    return (
-        [f"      {env_name(topic.name)}: {topic.default_value}" for topic in topics[:-1]],
-        [f"      {env_name(topics[-1].name)}: {topics[-1].default_value}"],
-    )
+    topic_directions = extract_readme_topic_directions(package_readme)
+    input_lines: list[str] = []
+    output_lines: list[str] = []
+    other_lines: list[str] = []
+
+    for name in launch_data.remappable_topic_names:
+        argument = arguments.get(name)
+        if argument is None:
+            continue
+        direction = topic_directions.get(argument.default_value, "other")
+
+        line = f"      {env_name(argument.name)}: {argument.default_value}"
+        if direction == "input":
+            input_lines.append(line)
+        elif direction == "output":
+            output_lines.append(line)
+        else:
+            other_lines.append(line)
+
+    return input_lines, output_lines, other_lines
 
 
 def build_compose(repo_root: Path) -> str:
@@ -234,7 +285,7 @@ def build_compose(repo_root: Path) -> str:
     owner = github_owner_from_origin(repo_root)
     image = f"ghcr.io/{owner}/{package_metadata.name}:v{package_metadata.version}"
     arguments = sorted_launch_arguments(launch_data)
-    input_lines, output_lines = topic_environment_lines(launch_data)
+    input_lines, output_lines, other_lines = topic_environment_lines(launch_data, repo_root / package_metadata.name / "README.md")
     log_level = arguments.get("log_level", LaunchArgument("log_level", "info", "")).default_value or "info"
     use_sim_time = arguments.get("use_sim_time", LaunchArgument("use_sim_time", "false", "")).default_value or "false"
     node_name = arguments.get("name", LaunchArgument("name", launch_data.executable, "")).default_value or launch_data.executable
@@ -256,6 +307,7 @@ def build_compose(repo_root: Path) -> str:
     lines.extend(
         [
             "      # --- other -----",
+            *other_lines,
             f"      LOG_LEVEL: ${{LOG_LEVEL:-{log_level}}}",
             f"      USE_SIM_TIME: ${{USE_SIM_TIME:-{use_sim_time}}}",
             "    command:",
@@ -310,7 +362,7 @@ def print_diff(old: str, new: str, compose_path: Path, repo_root: Path) -> None:
             color = cyan
         else:
             color = ""
-        print(f"{color}{line}{reset if color else ""}", end="")
+        print(f"{color}{line}{reset if color else ''}", end="")
 
 
 def resolve_repo_root(raw_repo_root: str | None) -> Path:
