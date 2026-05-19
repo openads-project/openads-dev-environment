@@ -169,8 +169,8 @@ Use [`check_repository_consistency.py`](scripts/check_repository_consistency.py)
 | `ros_packagexml_has_required_metadata` | Passes when every ROS package `package.xml` is valid XML and contains non-placeholder `<name>`, non-`0.0.0` `<version>`, `<description>`, at least one non-empty `<license>`, and at least one `<maintainer email="...">...</maintainer>` plus `<author email="...">...</author>` entry that are not left at the default `TODO` placeholder values. |
 | `ros_packagexml_has_required_testdepends` | Passes when every ROS package `package.xml` contains the exact required `<test_depend>` block for `ament_lint_auto`, `ament_cmake_clang_format`, `ament_cmake_clang_tidy`, and `ament_cmake_flake8`. |
 | `ros_pubsub_topics_private_namespace` | Passes when string-literal topic and service names passed to ROS `create_publisher`, `create_subscription`, `create_service`, and `create_client` calls use the private namespace form `~/...` instead of global or relative names. |
-| `source_files_have_copyright_notice` | Passes when every tracked `.cpp`, `.hpp`, and `.py` file contains the required copyright notice and `SPDX-License-Identifier: Apache-2.0` near the top of the file. |
-| `top_level_license_apache2` | Passes when a top-level `LICENSE` file exists and contains the Apache 2.0 license text markers (`Apache License`, `Version 2.0, January 2004`, `http://www.apache.org/licenses/`). |
+| `source_files_have_copyright_notice` | Passes when every tracked `.cpp`, `.hpp`, and `.py` file contains a copyright notice and a non-placeholder license notice near the top of the file, for example via `SPDX-License-Identifier: <license-expression>`. |
+| `top_level_license` | Passes when a top-level `LICENSE` file exists and contains non-placeholder license text. |
 
 ### CI Workflows
 
