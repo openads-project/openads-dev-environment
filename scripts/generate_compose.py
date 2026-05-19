@@ -17,6 +17,16 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from jinja2 import Environment, FileSystemLoader, TemplateNotFound
+except ModuleNotFoundError as exc:
+    if exc.name == "jinja2":
+        Environment = None
+        FileSystemLoader = None
+        TemplateNotFound = Exception
+    else:
+        raise
+
 
 DEFAULT_NAMESPACE = "/"
 DEFAULT_LAUNCH_FILE_NAME = "lanelet2_route_planning_launch.py"
@@ -43,6 +53,18 @@ class LaunchData:
 class PackageMetadata:
     name: str
     version: str
+
+
+@dataclass(frozen=True)
+class EnvironmentVariable:
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
+class LaunchCommandArgument:
+    name: str
+    env_name: str
 
 
 def constant_string(node: ast.AST | None) -> str | None:
@@ -249,28 +271,56 @@ def extract_readme_topic_directions(package_readme: Path) -> dict[str, str]:
     return directions
 
 
-def topic_environment_lines(launch_data: LaunchData, package_readme: Path) -> tuple[list[str], list[str], list[str]]:
+def topic_environment_variables(
+    launch_data: LaunchData, package_readme: Path
+) -> tuple[list[EnvironmentVariable], list[EnvironmentVariable], list[EnvironmentVariable]]:
     arguments = sorted_launch_arguments(launch_data)
     topic_directions = extract_readme_topic_directions(package_readme)
-    input_lines: list[str] = []
-    output_lines: list[str] = []
-    other_lines: list[str] = []
+    input_variables: list[EnvironmentVariable] = []
+    output_variables: list[EnvironmentVariable] = []
+    other_variables: list[EnvironmentVariable] = []
 
     for name in launch_data.remappable_topic_names:
         argument = arguments.get(name)
         if argument is None:
             continue
         direction = topic_directions.get(argument.default_value, "other")
+        variable = EnvironmentVariable(name=env_name(argument.name), value=argument.default_value)
 
-        line = f"      {env_name(argument.name)}: {argument.default_value}"
         if direction == "input":
-            input_lines.append(line)
+            input_variables.append(variable)
         elif direction == "output":
-            output_lines.append(line)
+            output_variables.append(variable)
         else:
-            other_lines.append(line)
+            other_variables.append(variable)
 
-    return input_lines, output_lines, other_lines
+    return input_variables, output_variables, other_variables
+
+
+
+
+def build_template_environment() -> Environment:
+    if Environment is None or FileSystemLoader is None:
+        raise RuntimeError(
+            "Missing dependency: jinja2. Install with "
+            "`pip install -r .openads-dev-environment/scripts/requirements.txt`."
+        )
+    templates_dir = Path(__file__).resolve().parent / "templates"
+    return Environment(
+        loader=FileSystemLoader(str(templates_dir)),
+        autoescape=False,
+        keep_trailing_newline=True,
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+
+
+def render_template(template_env: Environment, template_name: str, context: dict) -> str:
+    try:
+        template = template_env.get_template(template_name)
+    except TemplateNotFound as exc:
+        raise RuntimeError(f"Missing template: {template_name}") from exc
+    return template.render(**context)
 
 
 def build_compose(repo_root: Path) -> str:
@@ -283,56 +333,33 @@ def build_compose(repo_root: Path) -> str:
         )
 
     owner = github_owner_from_origin(repo_root)
-    image = f"ghcr.io/{owner}/{package_metadata.name}:v{package_metadata.version}"
     arguments = sorted_launch_arguments(launch_data)
-    input_lines, output_lines, other_lines = topic_environment_lines(launch_data, repo_root / package_metadata.name / "README.md")
+    input_variables, output_variables, other_topic_variables = topic_environment_variables(
+        launch_data, repo_root / package_metadata.name / "README.md"
+    )
     log_level = arguments.get("log_level", LaunchArgument("log_level", "info", "")).default_value or "info"
     use_sim_time = arguments.get("use_sim_time", LaunchArgument("use_sim_time", "false", "")).default_value or "false"
     node_name = arguments.get("name", LaunchArgument("name", launch_data.executable, "")).default_value or launch_data.executable
 
-    lines = [
-        "services:",
-        "",
-        f"  {compose_service_name(package_metadata.name)}:",
-        f"    image: {image}",
-        "    environment:",
-        "      # --- name ------",
-        f"      NAMESPACE: {DEFAULT_NAMESPACE}",
-        f"      NAME: {node_name}",
-    ]
-    if input_lines:
-        lines.extend(["      # --- inputs ----", *input_lines])
-    if output_lines:
-        lines.extend(["      # --- outputs ---", *output_lines])
-    lines.extend(
-        [
-            "      # --- other -----",
-            *other_lines,
-            f"      LOG_LEVEL: ${{LOG_LEVEL:-{log_level}}}",
-            f"      USE_SIM_TIME: ${{USE_SIM_TIME:-{use_sim_time}}}",
-            "    command:",
-            "      - /bin/bash",
-            "      - -ic",
-            "      - |",
-            f"        ros2 launch {launch_data.package} {launch_data.launch_file_name} \\",
-        ]
-    )
-
-    launch_argument_names = command_argument_names(launch_data)
-    for index, argument_name in enumerate(launch_argument_names):
-        suffix = " \\" if index < len(launch_argument_names) - 1 else ""
-        lines.append(f"          {argument_name}:=$${{{env_name(argument_name)}}}{suffix}")
-
-    lines.extend(
-        [
-            "    # volumes:",
-            "    #   - ./params.yml:"
-            f"/docker-ros/ws/install/{package_metadata.name}/share/{package_metadata.name}/config/params.yml",
-            "",
-        ]
-    )
-    return "\n".join(lines)
-
+    context = {
+        "service_name": compose_service_name(package_metadata.name),
+        "image": f"ghcr.io/{owner}/{package_metadata.name}:v{package_metadata.version}",
+        "namespace": DEFAULT_NAMESPACE,
+        "node_name": node_name,
+        "input_variables": input_variables,
+        "output_variables": output_variables,
+        "other_topic_variables": other_topic_variables,
+        "log_level": log_level,
+        "use_sim_time": use_sim_time,
+        "launch_package": launch_data.package,
+        "launch_file_name": launch_data.launch_file_name,
+        "launch_arguments": [
+            LaunchCommandArgument(name=argument_name, env_name=env_name(argument_name))
+            for argument_name in command_argument_names(launch_data)
+        ],
+        "package_name": package_metadata.name,
+    }
+    return render_template(build_template_environment(), "docker_compose.yml.j2", context)
 
 def build_diff(expected: str, current: str, compose_path: Path, repo_root: Path) -> str:
     rel_path = compose_path.relative_to(repo_root).as_posix()
