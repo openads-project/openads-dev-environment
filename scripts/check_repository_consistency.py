@@ -61,6 +61,7 @@ RE_COPYRIGHT_HEADER = re.compile(r"\bcopyright\b", re.IGNORECASE)
 RE_LICENSE_WORD = re.compile(r"\blicen[cs]e(?:d)?\b", re.IGNORECASE)
 RE_SPDX_LICENSE_IDENTIFIER = re.compile(r"SPDX-License-Identifier:\s*(.+)", re.IGNORECASE)
 RE_TODO_PLACEHOLDER = re.compile(r"\b(?:TODO|TBD)\b", re.IGNORECASE)
+RE_TEMPLATE_PLACEHOLDER = re.compile(r"{{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*}}")
 RE_KEYWORD_DEFAULT_VALUE = re.compile(
     r"default_value\s*=\s*([rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"))"
 )
@@ -145,6 +146,21 @@ def extract_header_license_notice(header_text: str) -> str:
             return normalized_line
 
     return ""
+
+
+def matches_template_text_with_placeholders(actual_text: str, template_text: str) -> bool:
+    normalized_actual_text = actual_text.replace("\r\n", "\n")
+    normalized_template_text = template_text.replace("\r\n", "\n")
+
+    pattern_parts: list[str] = []
+    start_idx = 0
+    for match in RE_TEMPLATE_PLACEHOLDER.finditer(normalized_template_text):
+        pattern_parts.append(re.escape(normalized_template_text[start_idx:match.start()]))
+        pattern_parts.append(r"(?s:.*?)")
+        start_idx = match.end()
+    pattern_parts.append(re.escape(normalized_template_text[start_idx:]))
+
+    return re.fullmatch("".join(pattern_parts), normalized_actual_text) is not None
 
 
 def collect_element_text(element: ET.Element | None) -> str:
@@ -1520,7 +1536,7 @@ def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
             errors.append(f"missing workflow template: {template_path.relative_to(ctx.repo_root)}")
             continue
 
-        if root_path.read_bytes() != template_path.read_bytes():
+        if not matches_template_text_with_placeholders(read_text(root_path), read_text(template_path)):
             errors.append(
                 "content mismatch: "
                 f"{root_path.relative_to(ctx.repo_root)} != {template_path.relative_to(ctx.repo_root)}"

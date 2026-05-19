@@ -8,5 +8,5 @@ jobs:
   consistency:
     uses: openads-project/openads-dev-environment/.github/workflows/consistency.yml@consistency-forks
     with:
-      skip-checks: ""
+      skip-checks: {{ skipped_check_ids }}
     secrets: inherit
