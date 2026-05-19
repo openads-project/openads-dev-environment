@@ -149,6 +149,8 @@ Use [`check_repository_consistency.py`](scripts/check_repository_consistency.py)
 .openads-dev-environment/scripts/check_repository_consistency.py
 ```
 
+To skip specific checks in CI, set `CONSISTENCY_CHECKS_SKIP` to a comma-separated list of check IDs. The provided GitHub workflow template forwards the repository variable `vars.CONSISTENCY_CHECKS_SKIP`, and the GitLab template forwards the CI/CD variable `CONSISTENCY_CHECKS_SKIP`, to `check_repository_consistency.py --skip ...`.
+
 #### List of Consistency Checks
 
 | Name | Description |

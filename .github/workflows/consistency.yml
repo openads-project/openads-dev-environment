@@ -2,6 +2,12 @@ name: consistency
 
 on:
   workflow_call:
+    inputs:
+      skip-checks:
+        description: Comma-separated consistency check IDs to skip
+        required: false
+        type: string
+        default: ""
 
 jobs:
   consistency:
@@ -16,4 +22,11 @@ jobs:
       - name: Install dependencies via pip
         run: python3 -m pip install -r .openads-dev-environment/scripts/requirements.txt
       - name: Run consistency checks
-        run: python3 .openads-dev-environment/scripts/check_repository_consistency.py
+        env:
+          CONSISTENCY_CHECKS_SKIP: ${{ inputs.skip-checks }}
+        run: |
+          if [ -n "$CONSISTENCY_CHECKS_SKIP" ]; then
+            python3 .openads-dev-environment/scripts/check_repository_consistency.py --skip "$CONSISTENCY_CHECKS_SKIP"
+          else
+            python3 .openads-dev-environment/scripts/check_repository_consistency.py
+          fi
