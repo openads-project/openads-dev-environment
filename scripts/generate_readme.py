@@ -1040,7 +1040,14 @@ def render_package_readme(
 # Top-level README rendering
 # ---------------------------------------------------------------------------
 
-PRE_QUICKSTART_PLACEHOLDER = ''
+PRE_QUICKSTART_PLACEHOLDER = (
+    '> [!IMPORTANT]\n'
+    '> This repository is part of [***OpenADS***](https://github.com/openads-project), '
+    'the *Open Automated Driving Systems* project. *OpenADS* and its modules have '
+    'been initiated and are currently being maintained by the '
+    '[**Institute for Automotive Engineering (ika) at RWTH Aachen University**]'
+    '(https://www.ika.rwth-aachen.de/de/).'
+)
 
 
 def trim_blank_lines(lines: list[str]) -> list[str]:
@@ -1158,9 +1165,13 @@ def extract_h2_section_body(readme_text: str, section_title: str) -> Optional[st
 
 
 def extract_pre_quickstart_block(readme_text: str) -> str:
-    """Return custom content between IMPORTANT block and Quick Start, or placeholder."""
+    """Return the preserved pre-Quick Start section or the initial default note."""
     m = re.search(
-        r'> \[!IMPORTANT\]\s*\n(?:>.*\n)+\n(.*?)\n\n## 🚀 Quick Start',
+        r'<p align="center">\n'
+        r'  <strong>🚀 <a href="#-quick-start">Quick Start</a></strong> • '
+        r'<strong>💻 <a href="#-development">Development</a></strong> • '
+        r'<strong>📝 <a href="#-documentation">Documentation</a></strong>\n'
+        r'</p>(.*?)(?=\n##[^\n]*Quick Start|\Z)',
         readme_text,
         re.DOTALL,
     )
