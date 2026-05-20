@@ -178,6 +178,7 @@ This repository stores CI workflow templates for the following use cases. CI wor
 
 | Name | Description |
 | --- | --- |
+| `compose` | Publishes the repository Docker Compose file as an OCI artifact to GitHub Container Registry. |
 | `consistency` | Runs the [consistency checker](#consistency-checker) to check for repository consistency and convention adherence. |
 | `docker-ros` | Uses [docker-ros](https://github.com/ika-rwth-aachen/docker-ros) to build, test, and push a container image containing the ROS packages of the repository. |
 | `docs` | Builds and deploys documentation using [GitHub Pages](https://docs.github.com/en/pages) or [GitLab Pages](https://docs.gitlab.com/ee/user/project/pages/). |
