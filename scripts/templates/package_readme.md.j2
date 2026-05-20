@@ -13,7 +13,7 @@
 {%- macro render_parameter_table(parameters) -%}
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-{% for parameter in parameters %}| `{{ parameter.name }}` | `{{ parameter.ros_type }}` | `{{ parameter.default }}` | {{ parameter.description }} |
+{% for parameter in parameters %}| `{{ parameter.name }}` | `{{ parameter.ros_type }}` | {% if parameter.default == '-' %}-{% else %}`{{ parameter.default }}`{% endif %} | {{ parameter.description }} |
 {% endfor -%}
 {%- endmacro -%}
 {%- macro render_launch_args_table(arguments) -%}

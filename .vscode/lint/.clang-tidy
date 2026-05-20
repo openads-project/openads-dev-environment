@@ -5,11 +5,15 @@ Checks: >
   clang-analyzer-*,
   cppcoreguidelines-*,
   -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-macro-usage,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-pro-type-member-init,
   google-*,
+  -google-build-using-namespace,
   -google-runtime-references,
   readability-*
-  -readability-magic-numbers,
   -readability-implicit-bool-conversion,
+  -readability-magic-numbers,
   -readability-qualified-auto,
   -readability-redundant-string-cstr
 FormatStyle: google
