@@ -24,6 +24,9 @@ services:
 {% endfor %}
       LOG_LEVEL: ${LOG_LEVEL:-{{ log_level }}}
       USE_SIM_TIME: ${USE_SIM_TIME:-{{ use_sim_time }}}
+{% if params_default_path %}
+      PARAMS: ${PARAMS:-{{ params_default_path }}}
+{% endif %}
     command:
       - /bin/bash
       - -ic
@@ -33,4 +36,4 @@ services:
           {{ argument.name }}:=$${{ "{" }}{{ argument.env_name }}{{ "}" }}{{ " \\" if not loop.last else "" }}
 {% endfor %}
     # volumes:
-    #   - ./params.yml:/docker-ros/ws/install/{{ package_name }}/share/{{ package_name }}/config/params.yml
+    #   - ./params.yml:{{ params_default_path or "/docker-ros/ws/install/" ~ package_name ~ "/share/" ~ package_name ~ "/config/params.yml" }}

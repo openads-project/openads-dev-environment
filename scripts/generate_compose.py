@@ -227,7 +227,7 @@ def sorted_launch_arguments(launch_data: LaunchData) -> dict[str, LaunchArgument
 
 
 def command_argument_names(launch_data: LaunchData) -> list[str]:
-    names = ["namespace", "name", "log_level", "use_sim_time", *launch_data.remappable_topic_names]
+    names = ["namespace", "name", "log_level", "use_sim_time", "params", *launch_data.remappable_topic_names]
     return [name for name in names if name in sorted_launch_arguments(launch_data)]
 
 
@@ -297,8 +297,6 @@ def topic_environment_variables(
     return input_variables, output_variables, other_variables
 
 
-
-
 def build_template_environment() -> Environment:
     if Environment is None or FileSystemLoader is None:
         raise RuntimeError(
@@ -323,6 +321,10 @@ def render_template(template_env: Environment, template_name: str, context: dict
     return template.render(**context)
 
 
+def installed_params_path(package_name: str) -> str:
+    return f"/docker-ros/ws/install/{package_name}/share/{package_name}/config/params.yml"
+
+
 def build_compose(repo_root: Path) -> str:
     package_metadata = parse_package_metadata(repo_root / "lanelet2_route_planning" / "package.xml")
     launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name))
@@ -340,6 +342,7 @@ def build_compose(repo_root: Path) -> str:
     log_level = arguments.get("log_level", LaunchArgument("log_level", "info", "")).default_value or "info"
     use_sim_time = arguments.get("use_sim_time", LaunchArgument("use_sim_time", "false", "")).default_value or "false"
     node_name = arguments.get("name", LaunchArgument("name", launch_data.executable, "")).default_value or launch_data.executable
+    params_default_path = installed_params_path(package_metadata.name) if "params" in arguments else None
 
     context = {
         "service_name": compose_service_name(package_metadata.name),
@@ -351,6 +354,7 @@ def build_compose(repo_root: Path) -> str:
         "other_topic_variables": other_topic_variables,
         "log_level": log_level,
         "use_sim_time": use_sim_time,
+        "params_default_path": params_default_path,
         "launch_package": launch_data.package,
         "launch_file_name": launch_data.launch_file_name,
         "launch_arguments": [
@@ -360,6 +364,7 @@ def build_compose(repo_root: Path) -> str:
         "package_name": package_metadata.name,
     }
     return render_template(build_template_environment(), "docker_compose.yml.j2", context)
+
 
 def build_diff(expected: str, current: str, compose_path: Path, repo_root: Path) -> str:
     rel_path = compose_path.relative_to(repo_root).as_posix()
