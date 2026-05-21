@@ -25,37 +25,41 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+      - name: Check Docker Compose file
+        id: check-compose
+        shell: bash
+        run: |
+          if [[ -f "${{ inputs.compose-file }}" ]]; then
+            echo "compose-exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "compose-exists=false" >> "${GITHUB_OUTPUT}"
+          fi
       - name: Slugify ref name
+        if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
         id: slugify-ref-name
         uses: gacts/github-slug@v1
         with:
           to-slug: ${{ inputs.image-tag }}
-
       - name: Prepare artifact tag
+        if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
         id: artifact
         shell: bash
+        env:
+          IMAGE_NAME: ${{ inputs.image-name }}
         run: |
           compose_file="${{ inputs.compose-file }}"
-          if [[ ! -f "${compose_file}" ]]; then
-            echo "Missing ${compose_file}" >&2
-            exit 1
-          fi
-
           echo "compose-file=${compose_file}" >> "${GITHUB_OUTPUT}"
           echo "image=${IMAGE_NAME,,}" >> "${GITHUB_OUTPUT}"
           echo "tag=${{ steps.slugify-ref-name.outputs.slug }}" >> "${GITHUB_OUTPUT}"
-        env:
-          IMAGE_NAME: ${{ inputs.image-name }}
-
       - name: Log in to GitHub Container Registry
+        if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Push Docker Compose artifact
+        if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
         run: |
           docker compose \
             -f "${{ steps.artifact.outputs.compose-file }}" \
