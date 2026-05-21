@@ -29,7 +29,6 @@ except ModuleNotFoundError as exc:
 
 
 DEFAULT_NAMESPACE = "/"
-DEFAULT_LAUNCH_FILE_NAME = "lanelet2_route_planning_launch.py"
 COMPOSE_PATH = Path("docker/compose/docker-compose.yml")
 
 
@@ -170,11 +169,41 @@ def parse_launch_file(launch_file: Path) -> LaunchData:
     )
 
 
+def candidate_launch_files(launch_dir: Path, package_name: str) -> list[Path]:
+    preferred = launch_dir / f"{package_name}_launch.py"
+    candidates = sorted({*launch_dir.glob("*_launch.py"), *launch_dir.glob("*.launch.py")})
+    if preferred in candidates:
+        return [preferred, *[candidate for candidate in candidates if candidate != preferred]]
+    return candidates
+
+
 def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
-    launch_file = repo_root / package_name / "launch" / DEFAULT_LAUNCH_FILE_NAME
-    if not launch_file.is_file():
-        raise FileNotFoundError(f"default launch file not found: {launch_file}")
-    return launch_file
+    launch_dir = repo_root / package_name / "launch"
+    if not launch_dir.is_dir():
+        raise FileNotFoundError(f"default launch directory not found: {launch_dir}")
+
+    matching_launch_files: list[Path] = []
+    errors: list[str] = []
+    for launch_file in candidate_launch_files(launch_dir, package_name):
+        try:
+            launch_data = parse_launch_file(launch_file)
+        except Exception as exc:
+            errors.append(f"{launch_file}: {exc}")
+            continue
+        if launch_data.package == package_name:
+            matching_launch_files.append(launch_file)
+
+    if len(matching_launch_files) == 1:
+        return matching_launch_files[0]
+    if len(matching_launch_files) > 1:
+        launch_files = ", ".join(str(path) for path in matching_launch_files)
+        raise ValueError(f"multiple default launch files found for package {package_name!r}: {launch_files}")
+
+    details = "\n".join(errors)
+    message = f"default launch file for package {package_name!r} not found in {launch_dir}"
+    if details:
+        message = f"{message}\n{details}"
+    raise FileNotFoundError(message)
 
 
 def parse_package_metadata(package_xml: Path) -> PackageMetadata:
@@ -184,6 +213,20 @@ def parse_package_metadata(package_xml: Path) -> PackageMetadata:
     if not name or not version:
         raise ValueError(f"package.xml must define name and version: {package_xml}")
     return PackageMetadata(name=name, version=version)
+
+
+def find_default_package_metadata(repo_root: Path) -> PackageMetadata:
+    package_name = repo_root.name
+    package_xml = repo_root / package_name / "package.xml"
+    if not package_xml.is_file():
+        raise FileNotFoundError(f"default package.xml not found: {package_xml}")
+
+    package_metadata = parse_package_metadata(package_xml)
+    if package_metadata.name != package_name:
+        raise ValueError(
+            f"default package.xml name {package_metadata.name!r} does not match repository name {package_name!r}"
+        )
+    return package_metadata
 
 
 def run_git(args: list[str], repo_root: Path) -> str:
@@ -326,7 +369,7 @@ def installed_params_path(package_name: str) -> str:
 
 
 def build_compose(repo_root: Path) -> str:
-    package_metadata = parse_package_metadata(repo_root / "lanelet2_route_planning" / "package.xml")
+    package_metadata = find_default_package_metadata(repo_root)
     launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name))
 
     if launch_data.package != package_metadata.name:
