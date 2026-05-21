@@ -1,4 +1,4 @@
-name: compose
+name: compose-oci
 
 on:
   workflow_call:
@@ -20,7 +20,7 @@ on:
         default: compose-${{ github.ref_name }}
 
 jobs:
-  compose:
+  compose-oci:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

@@ -1429,7 +1429,7 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
 def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
     required_workflows = (
         "docker-ros.yml",
-        "compose.yml",
+        "compose-oci.yml",
         "docs.yml",
         "consistency.yml",
     )
@@ -1461,7 +1461,7 @@ def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
 
 def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
     workflow_files = (
-        "compose.yml",
+        "compose-oci.yml",
         "docs.yml",
         "consistency.yml",
     )
