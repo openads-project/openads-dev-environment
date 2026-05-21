@@ -61,6 +61,5 @@ jobs:
       - name: Push Docker Compose artifact
         if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
         run: |
-          docker compose \
-            -f "${{ steps.artifact.outputs.compose-file }}" \
-            publish --with-env "${{ steps.artifact.outputs.image }}:${{ steps.artifact.outputs.tag }}"
+          docker compose -f "${{ steps.artifact.outputs.compose-file }}" \
+            publish --with-env --yes "${{ steps.artifact.outputs.image }}:${{ steps.artifact.outputs.tag }}"
