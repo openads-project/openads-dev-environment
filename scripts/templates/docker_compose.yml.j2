@@ -27,6 +27,9 @@ services:
 {% if params_default_path %}
       PARAMS: ${PARAMS:-{{ params_default_path }}}
 {% endif %}
+{% for variable in extra_launch_variables %}
+      {{ variable.name }}: ${{ "{" }}{{ variable.name }}:-{{ variable.value }}{{ "}" }}
+{% endfor %}
     command:
       - /bin/bash
       - -ic

@@ -30,6 +30,7 @@ except ModuleNotFoundError as exc:
 
 DEFAULT_NAMESPACE = "/"
 COMPOSE_PATH = Path("docker/compose/docker-compose.yml")
+STANDARD_LAUNCH_ARGUMENT_NAMES = ("namespace", "name", "log_level", "use_sim_time", "params")
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ class LaunchArgument:
 @dataclass(frozen=True)
 class LaunchData:
     package: str
-    executable: str
+    executable: str | None
     launch_file_name: str
     arguments: list[LaunchArgument]
     remappable_topic_names: list[str]
@@ -144,7 +145,7 @@ def extract_launch_arguments(tree: ast.AST) -> list[LaunchArgument]:
     return arguments
 
 
-def extract_node_data(tree: ast.AST) -> tuple[str, str]:
+def extract_node_data(tree: ast.AST) -> tuple[str, str | None]:
     nodes = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and call_name(node.func) == "Node"]
     if len(nodes) != 1:
         raise ValueError(f"default launch file must define exactly one Node call, found {len(nodes)}")
@@ -152,8 +153,8 @@ def extract_node_data(tree: ast.AST) -> tuple[str, str]:
     node = nodes[0]
     package = constant_string(call_keyword(node, "package"))
     executable = constant_string(call_keyword(node, "executable"))
-    if package is None or executable is None:
-        raise ValueError("Node package and executable must be string literals")
+    if package is None:
+        raise ValueError("Node package must be a string literal")
     return package, executable
 
 
@@ -270,8 +271,21 @@ def sorted_launch_arguments(launch_data: LaunchData) -> dict[str, LaunchArgument
 
 
 def command_argument_names(launch_data: LaunchData) -> list[str]:
-    names = ["namespace", "name", "log_level", "use_sim_time", "params", *launch_data.remappable_topic_names]
+    arguments = sorted_launch_arguments(launch_data)
+    handled_names = {*STANDARD_LAUNCH_ARGUMENT_NAMES, *launch_data.remappable_topic_names}
+    extra_names = [argument.name for argument in launch_data.arguments if argument.name not in handled_names]
+    names = [*STANDARD_LAUNCH_ARGUMENT_NAMES, *extra_names, *launch_data.remappable_topic_names]
     return [name for name in names if name in sorted_launch_arguments(launch_data)]
+
+
+def extra_launch_environment_variables(launch_data: LaunchData) -> list[EnvironmentVariable]:
+    arguments = sorted_launch_arguments(launch_data)
+    handled_names = {*STANDARD_LAUNCH_ARGUMENT_NAMES, *launch_data.remappable_topic_names}
+    return [
+        EnvironmentVariable(name=env_name(argument.name), value=argument.default_value)
+        for argument in arguments.values()
+        if argument.name not in handled_names
+    ]
 
 
 def strip_markdown_code(value: str) -> str:
@@ -384,7 +398,7 @@ def build_compose(repo_root: Path) -> str:
     )
     log_level = arguments.get("log_level", LaunchArgument("log_level", "info", "")).default_value or "info"
     use_sim_time = arguments.get("use_sim_time", LaunchArgument("use_sim_time", "false", "")).default_value or "false"
-    node_name = arguments.get("name", LaunchArgument("name", launch_data.executable, "")).default_value or launch_data.executable
+    node_name = package_metadata.name
     params_default_path = installed_params_path(package_metadata.name) if "params" in arguments else None
 
     context = {
@@ -395,6 +409,7 @@ def build_compose(repo_root: Path) -> str:
         "input_variables": input_variables,
         "output_variables": output_variables,
         "other_topic_variables": other_topic_variables,
+        "extra_launch_variables": extra_launch_environment_variables(launch_data),
         "log_level": log_level,
         "use_sim_time": use_sim_time,
         "params_default_path": params_default_path,
