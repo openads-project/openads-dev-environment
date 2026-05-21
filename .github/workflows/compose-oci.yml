@@ -1,0 +1,65 @@
+name: compose-oci
+
+on:
+  workflow_call:
+    inputs:
+      compose-file:
+        description: Path to the Docker Compose file to publish
+        required: false
+        type: string
+        default: docker/compose/docker-compose.yml
+      image-name:
+        description: Image name to publish the Docker Compose artifact to
+        required: false
+        type: string
+        default: ghcr.io/${{ github.repository }}
+      image-tag:
+        description: Image tag to publish the Docker Compose artifact to
+        required: false
+        type: string
+        default: compose-${{ github.ref_name }}
+
+jobs:
+  compose-oci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Check Docker Compose file
+        id: check-compose
+        shell: bash
+        run: |
+          if [[ -f "${{ inputs.compose-file }}" ]]; then
+            echo "compose-exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "compose-exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Slugify ref name
+        if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
+        id: slugify-ref-name
+        uses: gacts/github-slug@v1
+        with:
+          to-slug: ${{ inputs.image-tag }}
+      - name: Prepare artifact tag
+        if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
+        id: artifact
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ inputs.image-name }}
+        run: |
+          compose_file="${{ inputs.compose-file }}"
+          echo "compose-file=${compose_file}" >> "${GITHUB_OUTPUT}"
+          echo "image=${IMAGE_NAME,,}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${{ steps.slugify-ref-name.outputs.slug }}" >> "${GITHUB_OUTPUT}"
+      - name: Log in to GitHub Container Registry
+        if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push Docker Compose artifact
+        if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
+        run: |
+          docker compose -f "${{ steps.artifact.outputs.compose-file }}" \
+            publish --with-env --yes "${{ steps.artifact.outputs.image }}:${{ steps.artifact.outputs.tag }}"

@@ -159,7 +159,6 @@ Use [`check_repository_consistency.py`](scripts/check_repository_consistency.py)
 | `docker_ros_ci_has_no_todo` | Passes when root docker-ros CI files, specifically `.github/workflows/docker-ros.yml` and `.gitlab-ci.yml` when present, contain no `TODO` placeholder text. This ensures the template `command` placeholder was replaced with a repository-specific command. |
 | `generated_readmes_have_no_todo` | Passes when the repository top-level `README.md` and every generated package `README.md` contain no `TODO` placeholders. Replace all remaining placeholder text before committing. |
 | `no_top_level_package_xml` | Passes when the repository root does not contain a `package.xml`. ROS packages must live in subdirectories instead of treating the whole repository as one package. |
-| `repository_name_not_ending_with_er` | Passes when the repository directory name does not end with `er`, enforcing names such as `trajectory_optimization` instead of `trajectory_optimizer`. |
 | `readme_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_readme.py` produces no README content changes and no additional git status changes. Re-run the generator and commit the result until a second run is clean. |
 | `required_root_ci_workflows` | Passes when `.github/workflows/` contains `docker-ros.yml`, `docs.yml`, and `consistency.yml`. |
 | `required_top_level_symlinks` | Passes when the repository root contains symlinks `.devcontainer -> .openads-dev-environment/.devcontainer/`, `.vscode -> .openads-dev-environment/.vscode/`, and `.pre-commit-config.yaml -> .openads-dev-environment/.pre-commit-config.yaml`. |
@@ -178,6 +177,7 @@ This repository stores CI workflow templates for the following use cases. CI wor
 
 | Name | Description |
 | --- | --- |
+| `compose-oci` | Publishes the repository Docker Compose file as an OCI artifact to the configured container registry. |
 | `consistency` | Runs the [consistency checker](#consistency-checker) to check for repository consistency and convention adherence. |
 | `docker-ros` | Uses [docker-ros](https://github.com/ika-rwth-aachen/docker-ros) to build, test, and push a container image containing the ROS packages of the repository. |
 | `docs` | Builds and deploys documentation using [GitHub Pages](https://docs.github.com/en/pages) or [GitLab Pages](https://docs.gitlab.com/ee/user/project/pages/). |

@@ -852,19 +852,20 @@ def build_launch_argument_rows(
     heading_path: tuple[str, ...],
 ) -> list[LaunchArgumentRow]:
     rows = []
-    for name, default, _description in args:
+    for name, default, description in args:
         name_cell = render_table_cell(name)
         default_cell = render_table_cell(default)
+        manual_description = render_manual_cell(
+            manual_descriptions,
+            heading_path,
+            'launch_arg',
+            [f'`{name_cell}`', f'`{default_cell}`'],
+        )
         rows.append(
             LaunchArgumentRow(
                 name=name_cell,
                 default=default_cell,
-                description=render_manual_cell(
-                    manual_descriptions,
-                    heading_path,
-                    'launch_arg',
-                    [f'`{name_cell}`', f'`{default_cell}`'],
-                ),
+                description=render_table_cell(description) if manual_description == 'TODO' else manual_description,
             )
         )
     return rows
