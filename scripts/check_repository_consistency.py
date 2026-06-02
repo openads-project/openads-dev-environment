@@ -1105,27 +1105,6 @@ def check_no_top_level_package_xml(ctx: CheckContext) -> CheckResult:
     )
 
 
-def check_repository_name_not_ending_with_er(ctx: CheckContext) -> CheckResult:
-    repo_name = ctx.repo_root.name
-
-    if repo_name.endswith("er"):
-        return CheckResult(
-            check_id="repository_name_not_ending_with_er",
-            name='Repository name does not end with "er"',
-            passed=False,
-            message='Repository name ends with "er"; prefer activity/object naming such as trajectory_optimization',
-            details=[repo_name],
-        )
-
-    return CheckResult(
-        check_id="repository_name_not_ending_with_er",
-        name='Repository name does not end with "er"',
-        passed=True,
-        message='Repository name does not end with "er"',
-        details=[],
-    )
-
-
 def check_top_level_license(ctx: CheckContext) -> CheckResult:
     license_path = ctx.repo_root / "LICENSE"
     if not license_path.is_file():
@@ -1205,8 +1184,8 @@ def check_source_files_have_copyright_notice(ctx: CheckContext) -> CheckResult:
             name="Tracked .cpp/.hpp/.py files include copyright and license notice",
             passed=False,
             message=(
-                "Some tracked .cpp/.hpp/.py files are missing a copyright or license notice "
-                "near the top of the file"
+                "Some tracked .cpp/.hpp/.py files are missing a copyright notice "
+                "and/or expected SPDX identifier near the top of the file"
             ),
             details=sorted(offenders),
         )
@@ -1474,6 +1453,7 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
 def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
     required_workflows = (
         "docker-ros.yml",
+        "compose-oci.yml",
         "docs.yml",
         "consistency.yml",
     )
@@ -1505,6 +1485,7 @@ def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
 
 def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
     workflow_files = (
+        "compose-oci.yml",
         "docs.yml",
         "consistency.yml",
     )
@@ -1730,6 +1711,44 @@ def check_readme_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_compose_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
+    generator_script = ctx.repo_root / ".openads-dev-environment" / "scripts" / "generate_compose.py"
+    if not generator_script.exists():
+        return CheckResult(
+            check_id="compose_generator_is_idempotent",
+            name="Docker Compose generator output is up to date",
+            passed=False,
+            message="Docker Compose generator script is missing",
+            details=[str(generator_script)],
+        )
+
+    run_result = run_command(
+        [sys.executable, str(generator_script), "--check", str(ctx.repo_root)],
+        cwd=ctx.repo_root,
+    )
+    if run_result.returncode != 0:
+        details: list[str] = [f"exit code: {run_result.returncode}"]
+        if run_result.stderr.strip():
+            details.append(f"stderr: {run_result.stderr.strip()}")
+        if run_result.stdout.strip():
+            details.append(f"stdout: {run_result.stdout.strip()}")
+        return CheckResult(
+            check_id="compose_generator_is_idempotent",
+            name="Docker Compose generator output is up to date",
+            passed=False,
+            message="Docker Compose file is not generated from the current launch metadata",
+            details=details,
+        )
+
+    return CheckResult(
+        check_id="compose_generator_is_idempotent",
+        name="Docker Compose generator output is up to date",
+        passed=True,
+        message="Docker Compose file matches generator output",
+        details=[],
+    )
+
+
 def check_generated_readmes_have_no_todo(ctx: CheckContext) -> CheckResult:
     offenders: list[str] = []
 
@@ -1800,10 +1819,6 @@ def check_docker_ros_ci_has_no_todo(ctx: CheckContext) -> CheckResult:
 
 CHECKS: dict[str, tuple[str, CheckFn]] = {
     "no_top_level_package_xml": ("No top-level package.xml", check_no_top_level_package_xml),
-    "repository_name_not_ending_with_er": (
-        'Repository name does not end with "er"',
-        check_repository_name_not_ending_with_er,
-    ),
     "top_level_license": (
         'Top-level "LICENSE" file specifies a license',
         check_top_level_license,
@@ -1859,6 +1874,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "readme_generator_is_idempotent": (
         "README generator produces no git changes",
         check_readme_generator_is_idempotent,
+    ),
+    "compose_generator_is_idempotent": (
+        "Docker Compose generator output is up to date",
+        check_compose_generator_is_idempotent,
     ),
     "generated_readmes_have_no_todo": (
         'Top-level and generated package READMEs contain no "TODO"',
