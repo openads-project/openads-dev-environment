@@ -24,9 +24,4 @@ jobs:
       - name: Run consistency checks
         env:
           CONSISTENCY_CHECKS_SKIP: ${{ inputs.skip-checks }}
-        run: |
-          if [ -n "$CONSISTENCY_CHECKS_SKIP" ]; then
-            python3 .openads-dev-environment/scripts/check_repository_consistency.py --skip "$CONSISTENCY_CHECKS_SKIP"
-          else
-            python3 .openads-dev-environment/scripts/check_repository_consistency.py
-          fi
+        run: python3 .openads-dev-environment/scripts/check_repository_consistency.py --skip "$CONSISTENCY_CHECKS_SKIP"
