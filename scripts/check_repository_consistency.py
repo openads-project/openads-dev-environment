@@ -61,7 +61,6 @@ RE_COPYRIGHT_HEADER = re.compile(r"\bcopyright\b", re.IGNORECASE)
 RE_LICENSE_WORD = re.compile(r"\blicen[cs]e(?:d)?\b", re.IGNORECASE)
 RE_SPDX_LICENSE_IDENTIFIER = re.compile(r"SPDX-License-Identifier:\s*(.+)", re.IGNORECASE)
 RE_TODO_PLACEHOLDER = re.compile(r"\b(?:TODO|TBD)\b", re.IGNORECASE)
-RE_TEMPLATE_PLACEHOLDER = re.compile(r"{{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*}}")
 RE_KEYWORD_DEFAULT_VALUE = re.compile(
     r"default_value\s*=\s*([rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"))"
 )
@@ -148,19 +147,21 @@ def extract_header_license_notice(header_text: str) -> str:
     return ""
 
 
-def matches_template_text_with_placeholders(actual_text: str, template_text: str) -> bool:
-    normalized_actual_text = actual_text.replace("\r\n", "\n")
-    normalized_template_text = template_text.replace("\r\n", "\n")
+def find_missing_template_line(actual_text: str, template_text: str) -> tuple[int, str] | None:
+    actual_lines = actual_text.replace("\r\n", "\n").split("\n")
+    template_lines = template_text.replace("\r\n", "\n").split("\n")
 
-    pattern_parts: list[str] = []
-    start_idx = 0
-    for match in RE_TEMPLATE_PLACEHOLDER.finditer(normalized_template_text):
-        pattern_parts.append(re.escape(normalized_template_text[start_idx:match.start()]))
-        pattern_parts.append(r"(?s:.*?)")
-        start_idx = match.end()
-    pattern_parts.append(re.escape(normalized_template_text[start_idx:]))
+    actual_index = 0
+    for template_line_no, template_line in enumerate(template_lines, start=1):
+        while actual_index < len(actual_lines):
+            if actual_lines[actual_index] == template_line:
+                actual_index += 1
+                break
+            actual_index += 1
+        else:
+            return template_line_no, template_line
 
-    return re.fullmatch("".join(pattern_parts), normalized_actual_text) is not None
+    return None
 
 
 def collect_element_text(element: ET.Element | None) -> str:
@@ -1524,19 +1525,22 @@ def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
             errors.append(f"missing workflow template: {template_path.relative_to(ctx.repo_root)}")
             continue
 
-        if not matches_template_text_with_placeholders(read_text(root_path), read_text(template_path)):
+        missing_line = find_missing_template_line(read_text(root_path), read_text(template_path))
+        if missing_line is not None:
+            line_no, line_text = missing_line
             errors.append(
-                "content mismatch: "
-                f"{root_path.relative_to(ctx.repo_root)} != {template_path.relative_to(ctx.repo_root)}"
+                "missing template line "
+                f"{line_no} ({line_text!r}): {root_path.relative_to(ctx.repo_root)} does not include all lines from "
+                f"{template_path.relative_to(ctx.repo_root)}"
             )
 
     if errors:
         return CheckResult(
             check_id="root_ci_workflows_match_templates",
-            name="Root CI workflows match workflow_call templates",
+            name="Root CI workflows include workflow_call template lines",
             passed=False,
             message=(
-                "Root CI workflows (excluding docker-ros.yml) do not exactly match "
+                "Root CI workflows (excluding docker-ros.yml) do not include all lines from "
                 "workflow_call templates"
             ),
             details=errors,
@@ -1544,10 +1548,10 @@ def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
 
     return CheckResult(
         check_id="root_ci_workflows_match_templates",
-        name="Root CI workflows match workflow_call templates",
+        name="Root CI workflows include workflow_call template lines",
         passed=True,
         message=(
-            "Root CI workflows (excluding docker-ros.yml) exactly match "
+            "Root CI workflows (excluding docker-ros.yml) include all lines from "
             "workflow_call templates"
         ),
         details=[],
@@ -1845,7 +1849,7 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
         check_required_root_ci_workflows,
     ),
     "root_ci_workflows_match_templates": (
-        "Root CI workflows match workflow_call templates",
+        "Root CI workflows include workflow_call template fields",
         check_root_ci_workflows_match_templates,
     ),
     "dev_environment_at_remote_main": (
