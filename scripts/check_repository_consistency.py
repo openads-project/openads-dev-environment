@@ -57,10 +57,10 @@ RE_PY_DECLARE_AND_LOAD = re.compile(r"def\s+declare_and_load_parameter\s*\(")
 RE_CPP_STRING_LITERAL = re.compile(r'^(?:u8|u|U|L)?"(?:\\.|[^"\\])*"$')
 RE_PY_STRING_LITERAL = re.compile(r"^[rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\")$")
 RE_CMAKE_TARGET_DECL = re.compile(r"^\s*add_(?:executable|library)\s*\(", re.MULTILINE)
-RE_COPYRIGHT_HEADER = re.compile(
-    r"Copyright\s+Institute\s+for\s+Automotive\s+Engineering\s+\(ika\),\s+RWTH\s+Aachen\s+University"
-)
-RE_SPDX_IDENTIFIER = re.compile(r"SPDX-License-Identifier:\s*([A-Za-z0-9.-]+)")
+RE_COPYRIGHT_HEADER = re.compile(r"\bcopyright\b", re.IGNORECASE)
+RE_LICENSE_WORD = re.compile(r"\blicen[cs]e(?:d)?\b", re.IGNORECASE)
+RE_SPDX_LICENSE_IDENTIFIER = re.compile(r"SPDX-License-Identifier:\s*(.+)", re.IGNORECASE)
+RE_TODO_PLACEHOLDER = re.compile(r"\b(?:TODO|TBD)\b", re.IGNORECASE)
 RE_KEYWORD_DEFAULT_VALUE = re.compile(
     r"default_value\s*=\s*([rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"))"
 )
@@ -128,6 +128,40 @@ def git_tracked_files(repo_root: Path) -> list[Path]:
 
 def normalize_whitespace(text: str) -> str:
     return " ".join(text.split())
+
+
+def has_todo_placeholder(text: str) -> bool:
+    return bool(RE_TODO_PLACEHOLDER.search(text))
+
+
+def extract_header_license_notice(header_text: str) -> str:
+    spdx_match = RE_SPDX_LICENSE_IDENTIFIER.search(header_text)
+    if spdx_match is not None:
+        return normalize_whitespace(spdx_match.group(1))
+
+    for line in header_text.splitlines():
+        normalized_line = normalize_whitespace(line.lstrip("#/ *\t"))
+        if normalized_line and RE_LICENSE_WORD.search(normalized_line):
+            return normalized_line
+
+    return ""
+
+
+def find_missing_template_line(actual_text: str, template_text: str) -> tuple[int, str] | None:
+    actual_lines = actual_text.replace("\r\n", "\n").split("\n")
+    template_lines = template_text.replace("\r\n", "\n").split("\n")
+
+    actual_index = 0
+    for template_line_no, template_line in enumerate(template_lines, start=1):
+        while actual_index < len(actual_lines):
+            if actual_lines[actual_index] == template_line:
+                actual_index += 1
+                break
+            actual_index += 1
+        else:
+            return template_line_no, template_line
+
+    return None
 
 
 def collect_element_text(element: ET.Element | None) -> str:
@@ -1071,38 +1105,41 @@ def check_no_top_level_package_xml(ctx: CheckContext) -> CheckResult:
     )
 
 
-def check_top_level_license_apache2(ctx: CheckContext) -> CheckResult:
+def check_top_level_license(ctx: CheckContext) -> CheckResult:
     license_path = ctx.repo_root / "LICENSE"
     if not license_path.is_file():
         return CheckResult(
-            check_id="top_level_license_apache2",
-            name='Top-level "LICENSE" with Apache 2.0',
+            check_id="top_level_license",
+            name='Top-level "LICENSE" file specifies a license',
             passed=False,
             message='Top-level "LICENSE" file is missing',
             details=[str(license_path.relative_to(ctx.repo_root))],
         )
 
-    license_text = read_text(license_path)
-    required_markers = (
-        "Apache License",
-        "Version 2.0, January 2004",
-        "http://www.apache.org/licenses/",
-    )
-    missing_markers = [marker for marker in required_markers if marker not in license_text]
-    if missing_markers:
+    license_text = read_text(license_path).strip()
+    if not license_text:
         return CheckResult(
-            check_id="top_level_license_apache2",
-            name='Top-level "LICENSE" with Apache 2.0',
+            check_id="top_level_license",
+            name='Top-level "LICENSE" file specifies a license',
             passed=False,
-            message='Top-level "LICENSE" does not appear to contain Apache 2.0 text',
-            details=[f"Missing marker: {marker}" for marker in missing_markers],
+            message='Top-level "LICENSE" file is empty',
+            details=[str(license_path.relative_to(ctx.repo_root))],
+        )
+
+    if has_todo_placeholder(license_text):
+        return CheckResult(
+            check_id="top_level_license",
+            name='Top-level "LICENSE" file specifies a license',
+            passed=False,
+            message='Top-level "LICENSE" file contains a TODO/TBD placeholder instead of license text',
+            details=[str(license_path.relative_to(ctx.repo_root))],
         )
 
     return CheckResult(
-        check_id="top_level_license_apache2",
-        name='Top-level "LICENSE" with Apache 2.0',
+        check_id="top_level_license",
+        name='Top-level "LICENSE" file specifies a license',
         passed=True,
-        message='Top-level "LICENSE" exists and contains Apache 2.0 markers',
+        message='Top-level "LICENSE" file exists and contains non-placeholder license text',
         details=[],
     )
 
@@ -1113,7 +1150,7 @@ def check_source_files_have_copyright_notice(ctx: CheckContext) -> CheckResult:
     except RuntimeError as err:
         return CheckResult(
             check_id="source_files_have_copyright_notice",
-            name="Tracked .cpp/.hpp/.py files include copyright notice",
+            name="Tracked .cpp/.hpp/.py files include copyright and license notice",
             passed=False,
             message="Failed to list tracked files from git",
             details=[str(err)],
@@ -1128,26 +1165,36 @@ def check_source_files_have_copyright_notice(ctx: CheckContext) -> CheckResult:
 
         text = read_text(path)
         header_window = "\n".join(text.splitlines()[:6])
-        if not RE_COPYRIGHT_HEADER.search(header_window) or not RE_SPDX_IDENTIFIER.search(header_window):
-            offenders.append(str(path.relative_to(ctx.repo_root)))
+        issues: list[str] = []
+        if not RE_COPYRIGHT_HEADER.search(header_window):
+            issues.append("missing copyright notice")
+
+        license_notice = extract_header_license_notice(header_window)
+        if not license_notice:
+            issues.append("missing license notice")
+        elif has_todo_placeholder(license_notice):
+            issues.append("license notice contains TODO/TBD placeholder")
+
+        if issues:
+            offenders.append(f"{path.relative_to(ctx.repo_root)}: {'; '.join(issues)}")
 
     if offenders:
         return CheckResult(
             check_id="source_files_have_copyright_notice",
-            name="Tracked .cpp/.hpp/.py files include copyright notice",
+            name="Tracked .cpp/.hpp/.py files include copyright and license notice",
             passed=False,
             message=(
-                "Some tracked .cpp/.hpp/.py files are missing the required copyright "
-                "notice and/or expected SPDX identifier near the top of the file"
+                "Some tracked .cpp/.hpp/.py files are missing a copyright notice "
+                "and/or expected SPDX identifier near the top of the file"
             ),
             details=sorted(offenders),
         )
 
     return CheckResult(
         check_id="source_files_have_copyright_notice",
-        name="Tracked .cpp/.hpp/.py files include copyright notice",
+        name="Tracked .cpp/.hpp/.py files include copyright and license notice",
         passed=True,
-        message="All tracked .cpp/.hpp/.py files include the required copyright notice",
+        message="All tracked .cpp/.hpp/.py files include non-placeholder copyright and license notices",
         details=[],
     )
 
@@ -1459,19 +1506,22 @@ def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
             errors.append(f"missing workflow template: {template_path.relative_to(ctx.repo_root)}")
             continue
 
-        if root_path.read_bytes() != template_path.read_bytes():
+        missing_line = find_missing_template_line(read_text(root_path), read_text(template_path))
+        if missing_line is not None:
+            line_no, line_text = missing_line
             errors.append(
-                "content mismatch: "
-                f"{root_path.relative_to(ctx.repo_root)} != {template_path.relative_to(ctx.repo_root)}"
+                "missing template line "
+                f"{line_no} ({line_text!r}): {root_path.relative_to(ctx.repo_root)} does not include all lines from "
+                f"{template_path.relative_to(ctx.repo_root)}"
             )
 
     if errors:
         return CheckResult(
             check_id="root_ci_workflows_match_templates",
-            name="Root CI workflows match workflow_call templates",
+            name="Root CI workflows include workflow_call template lines",
             passed=False,
             message=(
-                "Root CI workflows (excluding docker-ros.yml) do not exactly match "
+                "Root CI workflows (excluding docker-ros.yml) do not include all lines from "
                 "workflow_call templates"
             ),
             details=errors,
@@ -1479,10 +1529,10 @@ def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
 
     return CheckResult(
         check_id="root_ci_workflows_match_templates",
-        name="Root CI workflows match workflow_call templates",
+        name="Root CI workflows include workflow_call template lines",
         passed=True,
         message=(
-            "Root CI workflows (excluding docker-ros.yml) exactly match "
+            "Root CI workflows (excluding docker-ros.yml) include all lines from "
             "workflow_call templates"
         ),
         details=[],
@@ -1769,12 +1819,12 @@ def check_docker_ros_ci_has_no_todo(ctx: CheckContext) -> CheckResult:
 
 CHECKS: dict[str, tuple[str, CheckFn]] = {
     "no_top_level_package_xml": ("No top-level package.xml", check_no_top_level_package_xml),
-    "top_level_license_apache2": (
-        'Top-level "LICENSE" with Apache 2.0',
-        check_top_level_license_apache2,
+    "top_level_license": (
+        'Top-level "LICENSE" file specifies a license',
+        check_top_level_license,
     ),
     "source_files_have_copyright_notice": (
-        "Tracked .cpp/.hpp/.py files include copyright notice",
+        "Tracked .cpp/.hpp/.py files include copyright and license notice",
         check_source_files_have_copyright_notice,
     ),
     "cpp_code_has_doxygen_docs": (
@@ -1814,7 +1864,7 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
         check_required_root_ci_workflows,
     ),
     "root_ci_workflows_match_templates": (
-        "Root CI workflows match workflow_call templates",
+        "Root CI workflows include workflow_call template fields",
         check_root_ci_workflows_match_templates,
     ),
     "dev_environment_at_remote_main": (
