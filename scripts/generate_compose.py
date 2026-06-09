@@ -216,18 +216,35 @@ def parse_package_metadata(package_xml: Path) -> PackageMetadata:
     return PackageMetadata(name=name, version=version)
 
 
-def find_default_package_metadata(repo_root: Path) -> PackageMetadata:
-    package_name = repo_root.name
-    package_xml = repo_root / package_name / "package.xml"
-    if not package_xml.is_file():
-        raise FileNotFoundError(f"default package.xml not found: {package_xml}")
+def discover_package_metadata(repo_root: Path) -> list[PackageMetadata]:
+    metadata: list[PackageMetadata] = []
+    for package_xml in sorted(repo_root.rglob("package.xml")):
+        if package_xml.parent == repo_root:
+            continue
+        metadata.append(parse_package_metadata(package_xml))
+    return metadata
 
-    package_metadata = parse_package_metadata(package_xml)
-    if package_metadata.name != package_name:
-        raise ValueError(
-            f"default package.xml name {package_metadata.name!r} does not match repository name {package_name!r}"
-        )
-    return package_metadata
+
+def find_default_package_metadata(repo_root: Path) -> PackageMetadata:
+    package_xml = repo_root / repo_root.name / "package.xml"
+    if package_xml.is_file():
+        package_metadata = parse_package_metadata(package_xml)
+        if package_metadata.name != repo_root.name:
+            raise ValueError(
+                f"default package.xml name {package_metadata.name!r} does not match repository name {repo_root.name!r}"
+            )
+        return package_metadata
+
+    packages = discover_package_metadata(repo_root)
+    if len(packages) == 1:
+        return packages[0]
+    if not packages:
+        raise FileNotFoundError(f"no ROS package.xml found below repository root: {repo_root}")
+    package_names = ", ".join(package.name for package in packages)
+    raise ValueError(
+        f"repository root name {repo_root.name!r} does not identify a package and multiple packages were found: "
+        f"{package_names}"
+    )
 
 
 def run_git(args: list[str], repo_root: Path) -> str:
@@ -258,6 +275,25 @@ def github_owner_from_origin(repo_root: Path) -> str:
     raise ValueError(f"origin remote is not a supported GitHub URL: {remote_url}")
 
 
+def github_owner_from_existing_compose(repo_root: Path, package_name: str) -> str | None:
+    compose_path = repo_root / COMPOSE_PATH
+    if not compose_path.is_file():
+        return None
+    pattern = re.compile(rf"image:\s*ghcr\.io/([^/\s]+)/{re.escape(package_name)}:")
+    match = pattern.search(compose_path.read_text(encoding="utf-8"))
+    return match.group(1) if match else None
+
+
+def github_owner(repo_root: Path, package_name: str) -> str:
+    try:
+        return github_owner_from_origin(repo_root)
+    except ValueError:
+        owner = github_owner_from_existing_compose(repo_root, package_name)
+        if owner:
+            return owner
+        raise
+
+
 def env_name(argument_name: str) -> str:
     return argument_name.upper()
 
@@ -271,7 +307,6 @@ def sorted_launch_arguments(launch_data: LaunchData) -> dict[str, LaunchArgument
 
 
 def command_argument_names(launch_data: LaunchData) -> list[str]:
-    arguments = sorted_launch_arguments(launch_data)
     handled_names = {*STANDARD_LAUNCH_ARGUMENT_NAMES, *launch_data.remappable_topic_names}
     extra_names = [argument.name for argument in launch_data.arguments if argument.name not in handled_names]
     names = [*STANDARD_LAUNCH_ARGUMENT_NAMES, *extra_names, *launch_data.remappable_topic_names]
@@ -391,7 +426,7 @@ def build_compose(repo_root: Path) -> str:
             f"default launch package {launch_data.package!r} does not match package.xml name {package_metadata.name!r}"
         )
 
-    owner = github_owner_from_origin(repo_root)
+    owner = github_owner(repo_root, package_metadata.name)
     arguments = sorted_launch_arguments(launch_data)
     input_variables, output_variables, other_topic_variables = topic_environment_variables(
         launch_data, repo_root / package_metadata.name / "README.md"

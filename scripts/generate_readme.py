@@ -1430,16 +1430,27 @@ def parse_repo_remote(remote: str) -> RepoMetadata:
     owner = '/'.join(path_parts[:-1])
     repo = path_parts[-1]
     owner_lower = owner.lower()
-    provider = 'github' if host.lower() == 'github.com' else 'other'
+    host_lower = host.lower()
+    provider = 'github' if host_lower == 'github.com' else 'gitlab' if host_lower.startswith('gitlab.') else 'other'
     repo_https_url = f'https://{host}/{path}'
 
-    pages_url = 'TODO'
+    pages_url = ''
     if provider == 'github':
         pages_url = f'https://{owner_lower}.github.io/{repo}'
+    elif provider == 'gitlab':
+        namespace_parts = owner_lower.split('/')
+        if namespace_parts:
+            pages_host = host_lower.removeprefix('gitlab.')
+            pages_path = '/'.join([*namespace_parts[1:], repo])
+            pages_url = f'https://{namespace_parts[0]}.pages.{pages_host}'
+            if pages_path:
+                pages_url = f'{pages_url}/{pages_path}'
 
-    container_image = 'TODO'
+    container_image = ''
     if provider == 'github':
         container_image = f'ghcr.io/{owner_lower}/{repo}:latest'
+    elif provider == 'gitlab':
+        container_image = f'{host}:5050/{path}:latest'
 
     return RepoMetadata(
         host=host,
@@ -1491,7 +1502,7 @@ def extract_pre_quickstart_block(readme_text: str) -> str:
         re.DOTALL,
     )
     if m is not None:
-        return m.group(1).strip()
+        return m.group(1)
     return PRE_QUICKSTART_PLACEHOLDER
 
 
