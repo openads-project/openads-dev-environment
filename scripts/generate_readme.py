@@ -47,6 +47,12 @@ class TopicInterface:
     msg_type: str
 
 
+TRANSPORT_MESSAGE_TYPES = {
+    'image_transport': 'sensor_msgs/msg/Image',
+    'point_cloud_transport': 'sensor_msgs/msg/PointCloud2',
+}
+
+
 @dataclass
 class ActionInterface:
     name: str
@@ -189,6 +195,10 @@ def cpp_ros_type(cpp_type: str, type_aliases: dict) -> str:
     """Resolve type aliases and convert C++ ROS type to ROS notation (:: -> /)."""
     t = cpp_type.strip()
     t = type_aliases.get(t, t)
+    for alias, target in type_aliases.items():
+        if t.startswith(f'{alias}::'):
+            t = f'{target}::{t[len(alias) + 2:]}'
+            break
     return t.replace('::', '/').strip()
 
 
@@ -254,7 +264,7 @@ def find_packages(repo_root: Path) -> list:
 
 def find_node_sources(package_dir: Path) -> list:
     """Return .cpp files that define a ROS node (contain ': Node("..." )')."""
-    node_pattern = re.compile(r':\s*Node\s*\(')
+    node_pattern = re.compile(r':\s*(?:(?:\w+)::)*Node\s*\(')
     return [
         cpp for cpp in sorted(package_dir.rglob('*.cpp'))
         if node_pattern.search(cpp.read_text(errors='replace'))
@@ -293,22 +303,269 @@ def find_launch_files(package_dir: Path) -> list:
 # ---------------------------------------------------------------------------
 
 def extract_node_name(source: str) -> Optional[str]:
-    m = re.search(r':\s*Node\s*\(\s*"([^"]+)"', source)
+    m = re.search(r':\s*(?:(?:\w+)::)*Node\s*\(\s*"([^"]+)"', source)
     return m.group(1) if m else None
 
 
-def extract_subscribers(source: str, aliases: dict) -> list:
-    return [
-        TopicInterface(name=m.group(2), msg_type=cpp_ros_type(m.group(1), aliases))
-        for m in re.finditer(r'create_subscription\s*<([^>]+)>\s*\(\s*"([^"]+)"', source)
-    ]
+def extract_cpp_string_symbols(source: str) -> dict[str, str]:
+    """Return simple C++ string constants and local aliases found in source."""
+    symbols: dict[str, str] = {}
+    string_literal = r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"'
+
+    const_patterns = (
+        rf'\b(?:static\s+)?(?:inline\s+)?(?:constexpr\s+)?(?:const\s+)?(?:std::string|char\s*(?:const)?\s*\*|const\s+char\s*\*)\s+'
+        rf'((?:(?:\w+)::)?\w+)\s*=\s*({string_literal})\s*;',
+        rf'\b(?:static\s+)?(?:inline\s+)?(?:constexpr\s+)?(?:const\s+)?(?:std::string|char\s*(?:const)?\s*\*|const\s+char\s*\*)\s+'
+        rf'((?:(?:\w+)::)?\w+)\s*\{{\s*({string_literal})\s*\}}\s*;',
+    )
+    for pattern in const_patterns:
+        for match in re.finditer(pattern, source):
+            name = match.group(1)
+            value = decode_cpp_string_literal(match.group(3))
+            symbols[name] = value
+            symbols[name.split('::')[-1]] = value
+
+    local_pattern = re.compile(r'\bstd::string\s+(\w+)\s*=\s*([^;]+);', re.DOTALL)
+    for match in local_pattern.finditer(source):
+        value = resolve_cpp_string_expression(match.group(2), symbols)
+        if value:
+            symbols[match.group(1)] = value
+
+    return symbols
 
 
-def extract_publishers(source: str, aliases: dict) -> list:
-    return [
-        TopicInterface(name=m.group(2), msg_type=cpp_ros_type(m.group(1), aliases))
-        for m in re.finditer(r'create_publisher\s*<([^>]+)>\s*\(\s*"([^"]+)"', source)
-    ]
+def resolve_cpp_string_expression(expr: str, symbols: dict[str, str]) -> Optional[str]:
+    """Resolve string literals, known string symbols, and simple topic resolution wrappers."""
+    expr = expr.strip()
+    if not expr:
+        return None
+
+    resolve_match = re.search(r'resolve_topic_name\s*\((.*)\)', expr, re.DOTALL)
+    if resolve_match:
+        return resolve_cpp_string_expression(resolve_match.group(1), symbols)
+
+    literal_pattern = re.compile(r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"', re.DOTALL)
+    literals = [decode_cpp_string_literal(match.group(1)) for match in literal_pattern.finditer(expr)]
+    if literals:
+        return ''.join(literals)
+
+    cleaned = re.sub(r'\bthis->', '', expr)
+    cleaned = cleaned.strip('() ')
+    if cleaned in symbols:
+        return symbols[cleaned]
+    if cleaned.split('::')[-1] in symbols:
+        return symbols[cleaned.split('::')[-1]]
+    return None
+
+
+def find_cpp_templated_call_bodies(source: str, function_name: str) -> list[tuple[str, str]]:
+    """Return [(template_argument, call_body)] for C++ calls with one template argument."""
+    calls = []
+    pattern = re.compile(rf'(?<!::)\b{re.escape(function_name)}\s*<([^>]+)>\s*\(')
+
+    for match in pattern.finditer(source):
+        start = match.end()
+        depth = 1
+        i = start
+        while i < len(source) and depth > 0:
+            if source[i] == '(':
+                depth += 1
+            elif source[i] == ')':
+                depth -= 1
+            i += 1
+        if depth == 0:
+            calls.append((match.group(1).strip(), source[start:i - 1]))
+
+    return calls
+
+
+def find_cpp_member_call_bodies(source: str, function_name: str) -> list[tuple[str, str]]:
+    """Return [(receiver_expression, call_body)] for C++ member calls."""
+    calls = []
+    pattern = re.compile(
+        rf'(?P<receiver>(?:this->)?\w+(?:\s*(?:->|\.)\s*\w+)*)\s*(?:->|\.)\s*{re.escape(function_name)}\s*\('
+    )
+
+    for match in pattern.finditer(source):
+        start = match.end()
+        depth = 1
+        i = start
+        while i < len(source) and depth > 0:
+            if source[i] == '(':
+                depth += 1
+            elif source[i] == ')':
+                depth -= 1
+            i += 1
+        if depth == 0:
+            calls.append((match.group('receiver').strip(), source[start:i - 1]))
+
+    return calls
+
+
+def find_cpp_qualified_call_bodies(source: str, function_name: str) -> list[tuple[str, str]]:
+    """Return [(namespace_or_class, call_body)] for C++ qualified calls."""
+    calls = []
+    pattern = re.compile(rf'\b((?:\w+::)+){re.escape(function_name)}\s*\(')
+
+    for match in pattern.finditer(source):
+        start = match.end()
+        depth = 1
+        i = start
+        while i < len(source) and depth > 0:
+            if source[i] == '(':
+                depth += 1
+            elif source[i] == ')':
+                depth -= 1
+            i += 1
+        if depth == 0:
+            calls.append((match.group(1).rstrip(':'), source[start:i - 1]))
+
+    return calls
+
+
+def unwrap_cpp_type(cpp_type: str) -> str:
+    """Remove common ownership wrappers around a C++ type."""
+    stripped = re.sub(r'\s+', '', cpp_type)
+    wrapper_match = re.fullmatch(r'(?:std::)?(?:unique_ptr|shared_ptr|weak_ptr)<(.+)>', stripped)
+    if wrapper_match:
+        return wrapper_match.group(1)
+    return stripped
+
+
+def extract_cpp_variable_types(source: str) -> dict[str, str]:
+    """Return variable/member names mapped to declared C++ types."""
+    variable_types: dict[str, str] = {}
+    type_token = r'(?:std::(?:unique_ptr|shared_ptr|weak_ptr)<\s*)?(?:(?:\w+)::)*\w+(?:\s*>)?'
+    pattern = re.compile(rf'\b({type_token})\s+(\w+)\s*(?:[;=({{])')
+
+    for match in pattern.finditer(source):
+        cpp_type = unwrap_cpp_type(match.group(1))
+        variable_types[match.group(2)] = cpp_type
+
+    return variable_types
+
+
+def transport_message_type_from_cpp_type(cpp_type: str, aliases: dict) -> Optional[str]:
+    """Infer message type for known ROS transport helper classes."""
+    resolved = aliases.get(cpp_type, cpp_type)
+    for namespace, msg_type in TRANSPORT_MESSAGE_TYPES.items():
+        if resolved == namespace or resolved.startswith(f'{namespace}::'):
+            return msg_type
+    return None
+
+
+def transport_message_type_from_receiver(receiver: str, variable_types: dict[str, str], aliases: dict) -> Optional[str]:
+    """Infer message type for member transport calls from the receiver object."""
+    cleaned = re.sub(r'\bthis->', '', receiver).strip()
+    root = re.split(r'\s*(?:->|\.)\s*', cleaned, maxsplit=1)[0]
+    cpp_type = variable_types.get(root)
+    if cpp_type:
+        return transport_message_type_from_cpp_type(cpp_type, aliases)
+    return transport_message_type_from_cpp_type(root, aliases)
+
+
+def is_transport_like(cpp_name: str) -> bool:
+    """Return whether a C++ receiver/type/qualifier looks like a ROS transport helper."""
+    return 'transport' in cpp_name.lower()
+
+
+def unknown_transport_message(function_name: str, transport_name: str) -> str:
+    """Return a clear error for unsupported transport helper APIs."""
+    known = ', '.join(sorted(TRANSPORT_MESSAGE_TYPES))
+    return (
+        f'Unable to infer ROS message type for transport call {transport_name}.{function_name}(...). '
+        f'Add the transport to TRANSPORT_MESSAGE_TYPES. Known transports: {known}.'
+    )
+
+
+def should_fail_unknown_transport(receiver: str, variable_types: dict[str, str]) -> bool:
+    """Return whether an unknown member call likely belongs to a transport helper."""
+    cleaned = re.sub(r'\bthis->', '', receiver).strip()
+    root = re.split(r'\s*(?:->|\.)\s*', cleaned, maxsplit=1)[0]
+    return is_transport_like(receiver) or is_transport_like(variable_types.get(root, ''))
+
+
+def unique_topic_interfaces(interfaces: list[TopicInterface]) -> list[TopicInterface]:
+    """Return interfaces with duplicate topic/type pairs removed while preserving order."""
+    seen: set[tuple[str, str]] = set()
+    result = []
+    for interface in interfaces:
+        key = (interface.name, interface.msg_type)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(interface)
+    return result
+
+
+def extract_subscribers(source: str, aliases: dict, string_symbols: dict[str, str], variable_types: dict[str, str]) -> list:
+    subscribers = []
+    for cpp_type, call_body in find_cpp_templated_call_bodies(source, 'create_subscription'):
+        args = split_cpp_arguments(call_body)
+        if not args:
+            continue
+        topic = resolve_cpp_string_expression(args[0], string_symbols)
+        if topic:
+            subscribers.append(TopicInterface(name=topic, msg_type=cpp_ros_type(cpp_type, aliases)))
+
+    for receiver, call_body in find_cpp_member_call_bodies(source, 'subscribe'):
+        args = split_cpp_arguments(call_body)
+        if not args:
+            continue
+        topic = resolve_cpp_string_expression(args[0], string_symbols)
+        msg_type = transport_message_type_from_receiver(receiver, variable_types, aliases)
+        if topic and msg_type:
+            subscribers.append(TopicInterface(name=topic, msg_type=msg_type))
+        elif topic and should_fail_unknown_transport(receiver, variable_types):
+            raise RuntimeError(unknown_transport_message('subscribe', receiver))
+
+    for qualifier, call_body in find_cpp_qualified_call_bodies(source, 'create_subscription'):
+        args = split_cpp_arguments(call_body)
+        if len(args) < 2:
+            continue
+        topic = resolve_cpp_string_expression(args[1], string_symbols)
+        msg_type = transport_message_type_from_cpp_type(qualifier, aliases)
+        if topic and msg_type:
+            subscribers.append(TopicInterface(name=topic, msg_type=msg_type))
+        elif topic and is_transport_like(qualifier):
+            raise RuntimeError(unknown_transport_message('create_subscription', qualifier))
+
+    return unique_topic_interfaces(subscribers)
+
+
+def extract_publishers(source: str, aliases: dict, string_symbols: dict[str, str], variable_types: dict[str, str]) -> list:
+    publishers = []
+    for cpp_type, call_body in find_cpp_templated_call_bodies(source, 'create_publisher'):
+        args = split_cpp_arguments(call_body)
+        if not args:
+            continue
+        topic = resolve_cpp_string_expression(args[0], string_symbols)
+        if topic:
+            publishers.append(TopicInterface(name=topic, msg_type=cpp_ros_type(cpp_type, aliases)))
+
+    for receiver, call_body in find_cpp_member_call_bodies(source, 'advertise'):
+        args = split_cpp_arguments(call_body)
+        if not args:
+            continue
+        topic = resolve_cpp_string_expression(args[0], string_symbols)
+        msg_type = transport_message_type_from_receiver(receiver, variable_types, aliases)
+        if topic and msg_type:
+            publishers.append(TopicInterface(name=topic, msg_type=msg_type))
+        elif topic and should_fail_unknown_transport(receiver, variable_types):
+            raise RuntimeError(unknown_transport_message('advertise', receiver))
+
+    for qualifier, call_body in find_cpp_qualified_call_bodies(source, 'create_publisher'):
+        args = split_cpp_arguments(call_body)
+        if len(args) < 2:
+            continue
+        topic = resolve_cpp_string_expression(args[1], string_symbols)
+        msg_type = transport_message_type_from_cpp_type(qualifier, aliases)
+        if topic and msg_type:
+            publishers.append(TopicInterface(name=topic, msg_type=msg_type))
+        elif topic and is_transport_like(qualifier):
+            raise RuntimeError(unknown_transport_message('create_publisher', qualifier))
+
+    return unique_topic_interfaces(publishers)
 
 
 def extract_action_servers(source: str, aliases: dict) -> list:
@@ -682,10 +939,14 @@ def build_enum_value_map(headers: list) -> dict[str, str]:
 
 def build_type_alias_map(headers: list) -> dict:
     """Return {alias: full_cpp_type} from 'using Alias = FullType;' declarations."""
-    pattern = re.compile(r'\busing\s+(\w+)\s*=\s*([^;]+);')
+    using_pattern = re.compile(r'\busing\s+(\w+)\s*=\s*([^;]+);')
+    namespace_pattern = re.compile(r'\bnamespace\s+(\w+)\s*=\s*([^;]+);')
     result = {}
     for header in headers:
-        for m in pattern.finditer(header.read_text(errors='replace')):
+        source = header.read_text(errors='replace')
+        for m in using_pattern.finditer(source):
+            result[m.group(1).strip()] = m.group(2).strip()
+        for m in namespace_pattern.finditer(source):
             result[m.group(1).strip()] = m.group(2).strip()
     return result
 
@@ -1390,13 +1651,17 @@ def main():
 
             for source_file in node_sources:
                 source = source_file.read_text(errors='replace')
+                source_context = '\n'.join([source, *(header.read_text(errors='replace') for header in headers)])
+                string_symbols = extract_cpp_string_symbols(source_context)
+                variable_types = extract_cpp_variable_types(source_context)
+                source_type_aliases = {**type_aliases, **build_type_alias_map([source_file])}
                 node = NodeInterfaces(
                     node_name=extract_node_name(source) or source_file.stem,
-                    subscribers=extract_subscribers(source, type_aliases),
-                    publishers=extract_publishers(source, type_aliases),
-                    service_servers=extract_service_servers(source, type_aliases),
-                    action_servers=extract_action_servers(source, type_aliases),
-                    action_clients=extract_action_clients(source, type_aliases),
+                    subscribers=extract_subscribers(source, source_type_aliases, string_symbols, variable_types),
+                    publishers=extract_publishers(source, source_type_aliases, string_symbols, variable_types),
+                    service_servers=extract_service_servers(source, source_type_aliases),
+                    action_servers=extract_action_servers(source, source_type_aliases),
+                    action_clients=extract_action_clients(source, source_type_aliases),
                     parameters=resolve_parameters(extract_raw_parameters(source), member_var_map, build_enum_value_map(headers)),
                 )
                 nodes.append(node)
