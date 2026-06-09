@@ -16,6 +16,7 @@ The READMEs generated are <package_dir>/README.md for discovered ROS packages.
 """
 
 import difflib
+import ast
 import re
 import subprocess
 import sys
@@ -542,59 +543,82 @@ def extract_cpp_string_expression(expr: str) -> str:
     return ''.join(literals)
 
 
+def extract_cpp_string_literal_expression(expr: str) -> Optional[str]:
+    """Collapse adjacent C++ string literals, or return None if the expression has no string literal."""
+    literal_pattern = re.compile(r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"', re.DOTALL)
+    literals = [decode_cpp_string_literal(match.group(1)) for match in literal_pattern.finditer(expr)]
+    if not literals:
+        return None
+    return ''.join(literals)
+
+
+def extract_parameter_member_name(expr: str) -> Optional[str]:
+    """Return the referenced member name from a parameter storage expression."""
+    expr = expr.strip()
+    member_match = re.fullmatch(r'(?:\w+\.)?(\w+)', expr)
+    if member_match:
+        return member_match.group(1)
+    return None
+
+
 def extract_raw_parameters(source: str) -> list:
-    """Return [(param_name, member_var_name, description)] from declareAndLoadParameter calls."""
+    """Return [(param_name, member_var_name, description)] from parameter declarations."""
     params = []
+
     for call_body in find_cpp_call_bodies(source, 'declareAndLoadParameter'):
         args = split_cpp_arguments(call_body)
         if len(args) < 3:
             continue
 
-        name = extract_cpp_string_expression(args[0])
-        member_var_match = re.fullmatch(r'\w+', args[1].strip())
+        name = extract_cpp_string_literal_expression(args[0])
+        member_name = extract_parameter_member_name(args[1])
         description = extract_cpp_string_expression(args[2])
 
-        if not name or not member_var_match:
+        if not name or not member_name:
             continue
 
-        params.append((name, member_var_match.group(0), description))
+        params.append((name, member_name, description))
+
     return params
 
 
 def extract_python_launch_arguments(source: str) -> list:
     """Return [(name, default, description)] from DeclareLaunchArgument calls in a .py file."""
     results = []
-    for m in re.finditer(r'DeclareLaunchArgument\s*\(', source):
-        # Walk forward to find the matching closing parenthesis.
-        start, depth, i = m.end(), 1, m.end()
-        while i < len(source) and depth > 0:
-            if source[i] == '(':
-                depth += 1
-            elif source[i] == ')':
-                depth -= 1
-            i += 1
-        call_body = source[start:i - 1]
+    tree = ast.parse(source)
 
-        name_m = re.match(r'\s*"([^"]+)"', call_body)
-        if not name_m:
+    def call_keyword(call: ast.Call, name: str) -> ast.AST | None:
+        for keyword in call.keywords:
+            if keyword.arg == name:
+                return keyword.value
+        return None
+
+    def constant_string(node: ast.AST | None) -> Optional[str]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        return None
+
+    def render_default(node: ast.AST | None) -> str:
+        value = constant_string(node)
+        if value is not None:
+            return f'"{value}"'
+        if node is None:
+            return ''
+        return (ast.get_source_segment(source, node) or ast.unparse(node)).strip()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
             continue
-        name = name_m.group(1)
+        func_name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, 'attr', '')
+        if func_name != 'DeclareLaunchArgument' or not node.args:
+            continue
 
-        dv_m = re.search(r'default_value\s*=\s*"([^"]*)"', call_body)
-        if dv_m:
-            default = f'"{dv_m.group(1)}"'
-        else:
-            dv_expr = re.search(
-                r'default_value\s*=\s*(.+?)(?=,\s*\w+\s*=|\s*$)', call_body, re.DOTALL)
-            if dv_expr:
-                default = ' '.join(dv_expr.group(1).split())
-                default = re.sub(r'\(\s+', '(', default)
-                default = re.sub(r'\s+\)', ')', default)
-            else:
-                default = ''
+        name = constant_string(node.args[0])
+        if name is None:
+            continue
 
-        desc_m = re.search(r'description\s*=\s*"([^"]*)"', call_body)
-        description = desc_m.group(1) if desc_m else ''
+        default = render_default(call_keyword(node, 'default_value'))
+        description = constant_string(call_keyword(node, 'description')) or ''
 
         results.append((name, default, description))
     return results
@@ -629,7 +653,7 @@ def extract_launch_arguments(path: Path) -> list:
 def build_member_var_map(headers: list) -> dict:
     """Return {var_name: (cpp_type, default_str)} from member variable declarations."""
     pattern = re.compile(
-        r'\b(double|float|int|long|long\s+int|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|bool|std::string|std::vector\s*<[^>]+>)\s+(\w+_)\s*'
+        r'\b(double|float|int|long|long\s+int|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|bool|std::string|std::vector\s*<[^>]+>)\s+(\w+)\s*'
         r'(?:=\s*([^;]+))?;'
     )
     result = {}
