@@ -1115,20 +1115,27 @@ def build_interface_rows(
     manual_descriptions: dict[tuple, str],
     heading_path: tuple[str, ...],
     table_kind: str,
+    fallback_descriptions: Optional[dict[str, str]] = None,
 ) -> list[InterfaceTableRow]:
-    return [
-        InterfaceTableRow(
-            name=i.name,
-            interface_type=getattr(i, type_attr),
-            description=render_manual_cell(
-                manual_descriptions,
-                heading_path,
-                table_kind,
-                [f"`{i.name}`", f"`{getattr(i, type_attr)}`"],
-            ),
+    rows = []
+    fallback_descriptions = fallback_descriptions or {}
+    for i in interfaces:
+        description = render_manual_cell(
+            manual_descriptions,
+            heading_path,
+            table_kind,
+            [f"`{i.name}`", f"`{getattr(i, type_attr)}`"],
         )
-        for i in interfaces
-    ]
+        if description == 'TODO':
+            description = render_table_cell(fallback_descriptions.get(i.name, ''))
+        rows.append(
+            InterfaceTableRow(
+                name=i.name,
+                interface_type=getattr(i, type_attr),
+                description=description,
+            )
+        )
+    return rows
 
 
 def build_launch_argument_rows(
@@ -1210,10 +1217,30 @@ def build_launch_file_contexts(
     return contexts
 
 
+def strip_rendered_string_default(value: str) -> str:
+    """Remove the display quotes used for string launch defaults."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return value[1:-1]
+    return value
+
+
+def build_topic_descriptions_from_launch_files(launch_files: list) -> dict[str, str]:
+    """Return topic descriptions keyed by default topic from launch remapping arguments."""
+    descriptions: dict[str, str] = {}
+    for launch_file in launch_files:
+        for _, default, description in extract_launch_arguments(launch_file):
+            topic = strip_rendered_string_default(default)
+            if topic.startswith('~/') and description:
+                descriptions.setdefault(topic, description)
+    return descriptions
+
+
 def build_node_context(
     node: NodeInterfaces,
     manual_descriptions: dict[tuple, str],
     manual_node_texts: dict[str, str],
+    topic_descriptions: dict[str, str],
 ) -> NodeTemplateContext:
     return NodeTemplateContext(
         node_name=node.node_name,
@@ -1224,6 +1251,7 @@ def build_node_context(
             manual_descriptions,
             ('Nodes', f'`{node.node_name}`', 'Subscribed Topics'),
             'topic',
+            topic_descriptions,
         ),
         publishers=build_interface_rows(
             node.publishers,
@@ -1231,6 +1259,7 @@ def build_node_context(
             manual_descriptions,
             ('Nodes', f'`{node.node_name}`', 'Published Topics'),
             'topic',
+            topic_descriptions,
         ),
         service_servers=build_interface_rows(
             node.service_servers,
@@ -1648,6 +1677,7 @@ def main():
             headers = find_headers(pkg_dir)
             member_var_map = build_member_var_map(headers)
             type_aliases = build_type_alias_map(headers)
+            topic_descriptions = build_topic_descriptions_from_launch_files(launch_files)
 
             for source_file in node_sources:
                 source = source_file.read_text(errors='replace')
@@ -1672,7 +1702,7 @@ def main():
                         title='Nodes',
                         kind='nodes',
                         nodes=[
-                            build_node_context(node, manual_descriptions, manual_node_texts)
+                            build_node_context(node, manual_descriptions, manual_node_texts, topic_descriptions)
                             for node in nodes
                         ],
                     )
