@@ -11,6 +11,7 @@ on:
 
 jobs:
   consistency:
+    name: consistency
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
