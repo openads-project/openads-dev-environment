@@ -47,6 +47,10 @@ This repository defines a common development environment for and enforces consis
     pip install pre-commit
     pre-commit install
     ```
+7. *(optional)* [Check consistency]((#consistency-checker) of your repository with OpenADS conventions.
+   ```bash
+    .openads-dev-environment/scripts/check_repository_consistency.py
+    ```
 
 
 ## Details
