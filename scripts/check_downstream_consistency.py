@@ -273,7 +273,7 @@ def actions_run_url() -> str:
 def write_markdown_report(results: list[ModuleResult], report_path: Path) -> None:
     """Write a concise Markdown report for downstream consistency results."""
     failed = [result for result in results if result.returncode != 0]
-    title = "Downstream consistency found issues" if failed else "Downstream consistency passed"
+    title = "Downstream consistency check found issues" if failed else "Downstream consistency passed"
     result_text = "found issues" if failed else "passed"
     run_url = actions_run_url()
 
