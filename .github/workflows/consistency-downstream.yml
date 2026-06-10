@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   consistency-downstream:
     runs-on: ubuntu-latest
@@ -21,9 +25,32 @@ jobs:
         run: python3 -m pip install -r scripts/requirements.txt
 
       - name: Run downstream consistency checks
+        id: downstream-consistency
+        shell: bash
         run: |
+          set +e
+          comment_file="downstream-consistency-comment.md"
+
           python3 scripts/check_downstream_consistency.py \
+            --markdown-report "${comment_file}" \
             https://github.com/openads-project/openads_demo_module.git \
             https://github.com/openads-project/trajectory_optimization.git \
             https://github.com/openads-project/ackermann_trajectory_control.git \
             https://github.com/openads-project/lanelet2_map_server.git
+
+          if [ ! -s "${comment_file}" ]; then
+            echo "Downstream consistency report was not generated." | tee "${comment_file}" >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+
+          cat "${comment_file}" >> "${GITHUB_STEP_SUMMARY}"
+
+          exit 0
+
+      - name: Comment downstream consistency result
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v3
+        continue-on-error: true
+        with:
+          header: downstream-consistency
+          path: downstream-consistency-comment.md

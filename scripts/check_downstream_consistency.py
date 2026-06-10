@@ -7,6 +7,7 @@
 
 Usage:
     python3 scripts/check_downstream_consistency.py REPOSITORY_URL [REPOSITORY_URL ...]
+    python3 scripts/check_downstream_consistency.py --markdown-report report.md REPOSITORY_URL [...]
 
 The script clones each module into a temporary directory, initializes its
 `.openads-dev-environment` submodule, overlays the openads-dev-environment
@@ -23,6 +24,7 @@ origin/main, not whether the overlaid local file contents are current.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -45,6 +47,7 @@ class ModuleResult:
     repository_url: str
     worktree: Path
     returncode: int
+    failed_checks: tuple[str, ...]
 
 
 def run_command(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -130,12 +133,36 @@ def clone_module(repository_url: str, destination: Path) -> None:
         raise RuntimeError(submodule_result.stderr.strip() or f"submodule init failed for {repository_url}")
 
 
-def run_consistency_check(module_root: Path, checker_args: list[str]) -> int:
+def extract_failed_checks(output: str) -> tuple[str, ...]:
+    """Return failed consistency check IDs from checker output."""
+    failed_checks: list[str] = []
+    seen: set[str] = set()
+    for line in output.splitlines():
+        if not line.startswith("FAIL  "):
+            continue
+        parts = line.split(maxsplit=2)
+        if len(parts) < 2 or parts[1] in seen:
+            continue
+        failed_checks.append(parts[1])
+        seen.add(parts[1])
+    return tuple(failed_checks)
+
+
+def run_consistency_check(module_root: Path, checker_args: list[str]) -> tuple[int, tuple[str, ...]]:
     """Run the overlaid consistency checker in a module checkout."""
     checker = module_root / ".openads-dev-environment" / "scripts" / "check_repository_consistency.py"
     command = [sys.executable, str(checker), "--repo-root", str(module_root), *checker_args]
-    result = subprocess.run(command, cwd=module_root, check=False)
-    return result.returncode
+    result = subprocess.run(
+        command,
+        cwd=module_root,
+        check=False,
+        stderr=subprocess.STDOUT,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    if result.stdout:
+        print(result.stdout, end="")
+    return result.returncode, extract_failed_checks(result.stdout)
 
 
 def test_module(
@@ -152,8 +179,13 @@ def test_module(
     print(f"\n=== {repository_url} ===", flush=True)
     clone_module(repository_url, module_root)
     overlay_current_dev_environment(source_dev_env, module_root / ".openads-dev-environment")
-    returncode = run_consistency_check(module_root, checker_args)
-    return ModuleResult(repository_url=repository_url, worktree=module_root, returncode=returncode)
+    returncode, failed_checks = run_consistency_check(module_root, checker_args)
+    return ModuleResult(
+        repository_url=repository_url,
+        worktree=module_root,
+        returncode=returncode,
+        failed_checks=failed_checks,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -175,6 +207,11 @@ def parse_args() -> argparse.Namespace:
         "--keep-work-dir",
         action="store_true",
         help="Keep the temporary work directory after the run.",
+    )
+    parser.add_argument(
+        "--markdown-report",
+        type=Path,
+        help="Write a concise Markdown report for CI summaries or PR comments.",
     )
     parser.add_argument(
         "--checker-arg",
@@ -211,6 +248,67 @@ def effective_checker_args(args: argparse.Namespace) -> list[str]:
     return checker_args
 
 
+def markdown_table_cell(value: str) -> str:
+    """Escape text for use in a Markdown table cell."""
+    return value.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+
+
+def markdown_link(label: str, url: str) -> str:
+    """Return a Markdown link with table-safe label and URL."""
+    safe_label = markdown_table_cell(label).replace("[", "\\[").replace("]", "\\]")
+    safe_url = url.replace(")", "%29").replace(" ", "%20")
+    return f"[{safe_label}]({safe_url})"
+
+
+def actions_run_url() -> str:
+    """Return the current GitHub Actions run URL when running in GitHub Actions."""
+    server_url = os.environ.get("GITHUB_SERVER_URL")
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    if not server_url or not repository or not run_id:
+        return ""
+    return f"{server_url}/{repository}/actions/runs/{run_id}"
+
+
+def write_markdown_report(results: list[ModuleResult], report_path: Path) -> None:
+    """Write a concise Markdown report for downstream consistency results."""
+    failed = [result for result in results if result.returncode != 0]
+    title = "Downstream consistency found issues" if failed else "Downstream consistency passed"
+    result_text = "found issues" if failed else "passed"
+    run_url = actions_run_url()
+
+    lines = [
+        f"## {title}",
+        "",
+        f"The downstream consistency check {result_text}.",
+        "",
+        "This workflow is intentionally non-blocking.",
+    ]
+    if run_url:
+        lines.append(f"See the full run logs: {run_url}")
+    else:
+        lines.append("See the full command output for details.")
+
+    lines.extend(
+        [
+            "",
+            "| Repository | Result | Failed checks |",
+            "| --- | --- | --- |",
+        ]
+    )
+
+    for result in results:
+        repository = markdown_link(repository_name(result.repository_url), result.repository_url)
+        status = "PASS" if result.returncode == 0 else "FAIL"
+        failed_checks = ", ".join(f"`{check}`" for check in result.failed_checks)
+        if result.returncode != 0 and not failed_checks:
+            failed_checks = "See logs"
+        lines.append(f"| {repository} | {status} | {failed_checks or '-'} |")
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("\n".join(lines) + "\n")
+
+
 def main() -> int:
     """Run consistency checks for all requested modules."""
     args = parse_args()
@@ -243,6 +341,9 @@ def main() -> int:
     for result in results:
         status = "PASS" if result.returncode == 0 else "FAIL"
         print(f"{status} {result.repository_url} ({result.worktree})")
+
+    if args.markdown_report:
+        write_markdown_report(results, args.markdown_report)
 
     return 1 if failed else 0
 
