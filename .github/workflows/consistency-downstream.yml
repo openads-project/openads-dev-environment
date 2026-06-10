@@ -2,6 +2,8 @@ name: consistency-downstream
 
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
