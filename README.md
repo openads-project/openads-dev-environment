@@ -13,6 +13,7 @@ This repository defines a common development environment for and enforces consis
 - [.devcontainer](#dev-container) definition for developing and debugging in container images built by [docker-ros](https://github.com/ika-rwth-aachen/docker-ros)
 - [pre-commit hooks](#pre-commit-hooks) configuration for running linting and formatting on each commit
 - [README generator](#readme-generator) for generating common-style repository READMEs
+- [Docker Compose generator](#docker-compose-generator) for generating OpenADS Compose files from launch metadata
 - [consistency checker](#consistency-checker) for enforcing conventions across repositories
 - [CI workflow templates](#ci-workflows) for building and testing container images, building documentation, and checking repository consistency
 
@@ -45,6 +46,10 @@ This repository defines a common development environment for and enforces consis
     ```bash
     pip install pre-commit
     pre-commit install
+    ```
+7. *(optional)* [Check consistency]((#consistency-checker) of your repository with OpenADS conventions.
+   ```bash
+    .openads-dev-environment/scripts/check_repository_consistency.py
     ```
 
 
@@ -141,6 +146,24 @@ Use [`generate_readme.py`](scripts/generate_readme.py) to generate common-style 
 .openads-dev-environment/scripts/generate_readme.py
 ```
 
+The package README generator derives ROS interface documentation from source and launch metadata. For C++ ROS nodes, parameters are extracted from `declareAndLoadParameter(...)` calls. Launch arguments are extracted from `DeclareLaunchArgument(...)` calls. Topic tables and flowcharts are generated from private ROS topic names such as `~/input` and launch remapping metadata. Known transport helper APIs such as `image_transport` and `point_cloud_transport` are mapped to their underlying ROS message types.
+
+### Docker Compose Generator
+
+Use [`generate_compose.py`](scripts/generate_compose.py) to generate `docker/compose/docker-compose.yml` from the repository's default ROS 2 launch file.
+
+```bash
+.openads-dev-environment/scripts/generate_compose.py
+```
+
+To check whether the committed Compose file is up to date without changing it, run:
+
+```bash
+.openads-dev-environment/scripts/generate_compose.py --check
+```
+
+The generator expects a ROS package subdirectory with a default launch file in `launch/`. The launch file must define the launched `Node`, `DeclareLaunchArgument(...)` entries, and a `remappable_topics` list for topic remaps that should be exposed as Compose environment variables.
+
 ### Consistency Checker
 
 Use [`check_repository_consistency.py`](scripts/check_repository_consistency.py) to run a set of checks that enforce consistency and conventions across repositories. This is set up to be run in CI, but can also be run locally to check for issues before pushing.
@@ -151,10 +174,13 @@ Use [`check_repository_consistency.py`](scripts/check_repository_consistency.py)
 
 Specific checks can be skipped in CI by setting the `skip-checks` input in the GitHub workflow template or setting the `CONSISTENCY_CHECKS_SKIP` environment variable in the GitLab template.
 
+The [`check_downstream_consistency.py`](scripts/check_downstream_consistency.py) helper is used by the `consistency-downstream` workflow to run the current development-environment checks against downstream OpenADS modules. When a new OpenADS module becomes available, add its repository URL to [`.github/workflows/consistency-downstream.yml`](.github/workflows/consistency-downstream.yml) so generator and consistency-check changes are tested against the complete module set.
+
 #### List of Consistency Checks
 
 | Name | Description |
 | --- | --- |
+| `compose_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_compose.py --check` reports that `docker/compose/docker-compose.yml` matches the current default launch metadata. Re-run the generator and commit the result until the check is clean. |
 | `cpp_code_has_doxygen_docs` | Passes when every tracked C++ function that Doxygen discovers has documentation on at least one emitted declaration or definition record. |
 | `default_launch_remappable_topics_cover_node_pubsub` | Passes when each default ROS package launch file lists every string-literal pub/sub/service/client name used by the launched node executables in its `remappable_topics` launch arguments. Packages without a default launch file are skipped. |
 | `dev_environment_at_remote_main` | Passes when `.openads-dev-environment` is present as a git repository and its current `HEAD` exactly matches `origin/main`. Update the submodule if it points to any other commit. |

@@ -16,6 +16,7 @@ The READMEs generated are <package_dir>/README.md for discovered ROS packages.
 """
 
 import difflib
+import ast
 import re
 import subprocess
 import sys
@@ -44,6 +45,12 @@ except ModuleNotFoundError as exc:
 class TopicInterface:
     name: str
     msg_type: str
+
+
+TRANSPORT_MESSAGE_TYPES = {
+    'image_transport': 'sensor_msgs/msg/Image',
+    'point_cloud_transport': 'sensor_msgs/msg/PointCloud2',
+}
 
 
 @dataclass
@@ -188,6 +195,10 @@ def cpp_ros_type(cpp_type: str, type_aliases: dict) -> str:
     """Resolve type aliases and convert C++ ROS type to ROS notation (:: -> /)."""
     t = cpp_type.strip()
     t = type_aliases.get(t, t)
+    for alias, target in type_aliases.items():
+        if t.startswith(f'{alias}::'):
+            t = f'{target}::{t[len(alias) + 2:]}'
+            break
     return t.replace('::', '/').strip()
 
 
@@ -253,7 +264,7 @@ def find_packages(repo_root: Path) -> list:
 
 def find_node_sources(package_dir: Path) -> list:
     """Return .cpp files that define a ROS node (contain ': Node("..." )')."""
-    node_pattern = re.compile(r':\s*Node\s*\(')
+    node_pattern = re.compile(r':\s*(?:(?:\w+)::)*Node\s*\(')
     return [
         cpp for cpp in sorted(package_dir.rglob('*.cpp'))
         if node_pattern.search(cpp.read_text(errors='replace'))
@@ -292,22 +303,275 @@ def find_launch_files(package_dir: Path) -> list:
 # ---------------------------------------------------------------------------
 
 def extract_node_name(source: str) -> Optional[str]:
-    m = re.search(r':\s*Node\s*\(\s*"([^"]+)"', source)
+    m = re.search(r':\s*(?:(?:\w+)::)*Node\s*\(\s*"([^"]+)"', source)
     return m.group(1) if m else None
 
 
-def extract_subscribers(source: str, aliases: dict) -> list:
-    return [
-        TopicInterface(name=m.group(2), msg_type=cpp_ros_type(m.group(1), aliases))
-        for m in re.finditer(r'create_subscription\s*<([^>]+)>\s*\(\s*"([^"]+)"', source)
-    ]
+def extract_cpp_string_symbols(source: str) -> dict[str, str]:
+    """Return simple C++ string constants and local aliases found in source."""
+    symbols: dict[str, str] = {}
+    string_literal = r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"'
+
+    const_patterns = (
+        rf'\b(?:static\s+)?(?:inline\s+)?(?:constexpr\s+)?(?:const\s+)?(?:std::string|char\s*(?:const)?\s*\*|const\s+char\s*\*)\s+'
+        rf'((?:(?:\w+)::)?\w+)\s*=\s*({string_literal})\s*;',
+        rf'\b(?:static\s+)?(?:inline\s+)?(?:constexpr\s+)?(?:const\s+)?(?:std::string|char\s*(?:const)?\s*\*|const\s+char\s*\*)\s+'
+        rf'((?:(?:\w+)::)?\w+)\s*\{{\s*({string_literal})\s*\}}\s*;',
+        rf'\b(?:static\s+)?(?:inline\s+)?(?:constexpr\s+)?(?:const\s+)?char\s+'
+        rf'((?:(?:\w+)::)?\w+)\s*\[[^\]]*\]\s*=\s*({string_literal})\s*;',
+    )
+    for pattern in const_patterns:
+        for match in re.finditer(pattern, source):
+            name = match.group(1)
+            value = decode_cpp_string_literal(match.group(3))
+            symbols[name] = value
+            symbols[name.split('::')[-1]] = value
+
+    local_pattern = re.compile(r'\bstd::string\s+(\w+)\s*=\s*([^;]+);', re.DOTALL)
+    for match in local_pattern.finditer(source):
+        value = resolve_cpp_string_expression(match.group(2), symbols)
+        if value:
+            symbols[match.group(1)] = value
+
+    return symbols
 
 
-def extract_publishers(source: str, aliases: dict) -> list:
-    return [
-        TopicInterface(name=m.group(2), msg_type=cpp_ros_type(m.group(1), aliases))
-        for m in re.finditer(r'create_publisher\s*<([^>]+)>\s*\(\s*"([^"]+)"', source)
-    ]
+def resolve_cpp_string_expression(expr: str, symbols: dict[str, str]) -> Optional[str]:
+    """Resolve string literals, known string symbols, and simple topic resolution wrappers."""
+    expr = expr.strip()
+    if not expr:
+        return None
+
+    resolve_match = re.search(r'resolve_topic_name\s*\((.*)\)', expr, re.DOTALL)
+    if resolve_match:
+        return resolve_cpp_string_expression(resolve_match.group(1), symbols)
+
+    literal_expr_pattern = re.compile(r'(?:\s*(?:u8|u|U|L)?"((?:\\.|[^"\\])*"))+\s*\Z', re.DOTALL)
+    literal_expr_match = literal_expr_pattern.fullmatch(expr)
+    if literal_expr_match:
+        literal_pattern = re.compile(r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"', re.DOTALL)
+        return ''.join(
+            decode_cpp_string_literal(match.group(1))
+            for match in literal_pattern.finditer(expr)
+        )
+
+    cleaned = re.sub(r'\bthis->', '', expr)
+    cleaned = cleaned.strip('() ')
+    if cleaned in symbols:
+        return symbols[cleaned]
+    if cleaned.split('::')[-1] in symbols:
+        return symbols[cleaned.split('::')[-1]]
+    return ' '.join(expr.split())
+
+
+def find_cpp_templated_call_bodies(source: str, function_name: str) -> list[tuple[str, str]]:
+    """Return [(template_argument, call_body)] for C++ calls with one template argument."""
+    calls = []
+    pattern = re.compile(rf'(?<!::)\b{re.escape(function_name)}\s*<([^>]+)>\s*\(')
+
+    for match in pattern.finditer(source):
+        start = match.end()
+        depth = 1
+        i = start
+        while i < len(source) and depth > 0:
+            if source[i] == '(':
+                depth += 1
+            elif source[i] == ')':
+                depth -= 1
+            i += 1
+        if depth == 0:
+            calls.append((match.group(1).strip(), source[start:i - 1]))
+
+    return calls
+
+
+def find_cpp_member_call_bodies(source: str, function_name: str) -> list[tuple[str, str]]:
+    """Return [(receiver_expression, call_body)] for C++ member calls."""
+    calls = []
+    pattern = re.compile(
+        rf'(?P<receiver>(?:this->)?\w+(?:\s*(?:->|\.)\s*\w+)*)\s*(?:->|\.)\s*{re.escape(function_name)}\s*\('
+    )
+
+    for match in pattern.finditer(source):
+        start = match.end()
+        depth = 1
+        i = start
+        while i < len(source) and depth > 0:
+            if source[i] == '(':
+                depth += 1
+            elif source[i] == ')':
+                depth -= 1
+            i += 1
+        if depth == 0:
+            calls.append((match.group('receiver').strip(), source[start:i - 1]))
+
+    return calls
+
+
+def find_cpp_qualified_call_bodies(source: str, function_name: str) -> list[tuple[str, str]]:
+    """Return [(namespace_or_class, call_body)] for C++ qualified calls."""
+    calls = []
+    pattern = re.compile(rf'\b((?:\w+::)+){re.escape(function_name)}\s*\(')
+
+    for match in pattern.finditer(source):
+        start = match.end()
+        depth = 1
+        i = start
+        while i < len(source) and depth > 0:
+            if source[i] == '(':
+                depth += 1
+            elif source[i] == ')':
+                depth -= 1
+            i += 1
+        if depth == 0:
+            calls.append((match.group(1).rstrip(':'), source[start:i - 1]))
+
+    return calls
+
+
+def unwrap_cpp_type(cpp_type: str) -> str:
+    """Remove common ownership wrappers around a C++ type."""
+    stripped = re.sub(r'\s+', '', cpp_type)
+    wrapper_match = re.fullmatch(r'(?:std::)?(?:unique_ptr|shared_ptr|weak_ptr)<(.+)>', stripped)
+    if wrapper_match:
+        return wrapper_match.group(1)
+    return stripped
+
+
+def extract_cpp_variable_types(source: str) -> dict[str, str]:
+    """Return variable/member names mapped to declared C++ types."""
+    variable_types: dict[str, str] = {}
+    type_token = r'(?:std::(?:unique_ptr|shared_ptr|weak_ptr)<\s*)?(?:(?:\w+)::)*\w+(?:\s*>)?'
+    pattern = re.compile(rf'\b({type_token})\s+(\w+)\s*(?:[;=({{])')
+
+    for match in pattern.finditer(source):
+        cpp_type = unwrap_cpp_type(match.group(1))
+        variable_types[match.group(2)] = cpp_type
+
+    return variable_types
+
+
+def transport_message_type_from_cpp_type(cpp_type: str, aliases: dict) -> Optional[str]:
+    """Infer message type for known ROS transport helper classes."""
+    resolved = aliases.get(cpp_type, cpp_type)
+    for namespace, msg_type in TRANSPORT_MESSAGE_TYPES.items():
+        if resolved == namespace or resolved.startswith(f'{namespace}::'):
+            return msg_type
+    return None
+
+
+def transport_message_type_from_receiver(receiver: str, variable_types: dict[str, str], aliases: dict) -> Optional[str]:
+    """Infer message type for member transport calls from the receiver object."""
+    cleaned = re.sub(r'\bthis->', '', receiver).strip()
+    root = re.split(r'\s*(?:->|\.)\s*', cleaned, maxsplit=1)[0]
+    cpp_type = variable_types.get(root)
+    if cpp_type:
+        return transport_message_type_from_cpp_type(cpp_type, aliases)
+    return transport_message_type_from_cpp_type(root, aliases)
+
+
+def is_transport_like(cpp_name: str) -> bool:
+    """Return whether a C++ receiver/type/qualifier looks like a ROS transport helper."""
+    return 'transport' in cpp_name.lower()
+
+
+def unknown_transport_message(function_name: str, transport_name: str) -> str:
+    """Return a clear error for unsupported transport helper APIs."""
+    known = ', '.join(sorted(TRANSPORT_MESSAGE_TYPES))
+    return (
+        f'Unable to infer ROS message type for transport call {transport_name}.{function_name}(...). '
+        f'Add the transport to TRANSPORT_MESSAGE_TYPES. Known transports: {known}.'
+    )
+
+
+def should_fail_unknown_transport(receiver: str, variable_types: dict[str, str]) -> bool:
+    """Return whether an unknown member call likely belongs to a transport helper."""
+    cleaned = re.sub(r'\bthis->', '', receiver).strip()
+    root = re.split(r'\s*(?:->|\.)\s*', cleaned, maxsplit=1)[0]
+    return is_transport_like(receiver) or is_transport_like(variable_types.get(root, ''))
+
+
+def unique_topic_interfaces(interfaces: list[TopicInterface]) -> list[TopicInterface]:
+    """Return interfaces with duplicate topic/type pairs removed while preserving order."""
+    seen: set[tuple[str, str]] = set()
+    result = []
+    for interface in interfaces:
+        key = (interface.name, interface.msg_type)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(interface)
+    return result
+
+
+def extract_subscribers(source: str, aliases: dict, string_symbols: dict[str, str], variable_types: dict[str, str]) -> list:
+    subscribers = []
+    for cpp_type, call_body in find_cpp_templated_call_bodies(source, 'create_subscription'):
+        args = split_cpp_arguments(call_body)
+        if not args:
+            continue
+        topic = resolve_cpp_string_expression(args[0], string_symbols)
+        if topic:
+            subscribers.append(TopicInterface(name=topic, msg_type=cpp_ros_type(cpp_type, aliases)))
+
+    for receiver, call_body in find_cpp_member_call_bodies(source, 'subscribe'):
+        args = split_cpp_arguments(call_body)
+        if not args:
+            continue
+        topic = resolve_cpp_string_expression(args[0], string_symbols)
+        msg_type = transport_message_type_from_receiver(receiver, variable_types, aliases)
+        if topic and msg_type:
+            subscribers.append(TopicInterface(name=topic, msg_type=msg_type))
+        elif topic and should_fail_unknown_transport(receiver, variable_types):
+            raise RuntimeError(unknown_transport_message('subscribe', receiver))
+
+    for qualifier, call_body in find_cpp_qualified_call_bodies(source, 'create_subscription'):
+        args = split_cpp_arguments(call_body)
+        if len(args) < 2:
+            continue
+        topic = resolve_cpp_string_expression(args[1], string_symbols)
+        msg_type = transport_message_type_from_cpp_type(qualifier, aliases)
+        if topic and msg_type:
+            subscribers.append(TopicInterface(name=topic, msg_type=msg_type))
+        elif topic and is_transport_like(qualifier):
+            raise RuntimeError(unknown_transport_message('create_subscription', qualifier))
+
+    return unique_topic_interfaces(subscribers)
+
+
+def extract_publishers(source: str, aliases: dict, string_symbols: dict[str, str], variable_types: dict[str, str]) -> list:
+    publishers = []
+    for cpp_type, call_body in find_cpp_templated_call_bodies(source, 'create_publisher'):
+        args = split_cpp_arguments(call_body)
+        if not args:
+            continue
+        topic = resolve_cpp_string_expression(args[0], string_symbols)
+        if topic:
+            publishers.append(TopicInterface(name=topic, msg_type=cpp_ros_type(cpp_type, aliases)))
+
+    for receiver, call_body in find_cpp_member_call_bodies(source, 'advertise'):
+        args = split_cpp_arguments(call_body)
+        if not args:
+            continue
+        topic = resolve_cpp_string_expression(args[0], string_symbols)
+        msg_type = transport_message_type_from_receiver(receiver, variable_types, aliases)
+        if topic and msg_type:
+            publishers.append(TopicInterface(name=topic, msg_type=msg_type))
+        elif topic and should_fail_unknown_transport(receiver, variable_types):
+            raise RuntimeError(unknown_transport_message('advertise', receiver))
+
+    for qualifier, call_body in find_cpp_qualified_call_bodies(source, 'create_publisher'):
+        args = split_cpp_arguments(call_body)
+        if len(args) < 2:
+            continue
+        topic = resolve_cpp_string_expression(args[1], string_symbols)
+        msg_type = transport_message_type_from_cpp_type(qualifier, aliases)
+        if topic and msg_type:
+            publishers.append(TopicInterface(name=topic, msg_type=msg_type))
+        elif topic and is_transport_like(qualifier):
+            raise RuntimeError(unknown_transport_message('create_publisher', qualifier))
+
+    return unique_topic_interfaces(publishers)
 
 
 def extract_action_servers(source: str, aliases: dict) -> list:
@@ -542,59 +806,82 @@ def extract_cpp_string_expression(expr: str) -> str:
     return ''.join(literals)
 
 
+def extract_cpp_string_literal_expression(expr: str) -> Optional[str]:
+    """Collapse adjacent C++ string literals, or return None if the expression has no string literal."""
+    literal_pattern = re.compile(r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"', re.DOTALL)
+    literals = [decode_cpp_string_literal(match.group(1)) for match in literal_pattern.finditer(expr)]
+    if not literals:
+        return None
+    return ''.join(literals)
+
+
+def extract_parameter_member_name(expr: str) -> Optional[str]:
+    """Return the referenced member name from a parameter storage expression."""
+    expr = expr.strip()
+    member_match = re.fullmatch(r'(?:\w+\.)?(\w+)', expr)
+    if member_match:
+        return member_match.group(1)
+    return None
+
+
 def extract_raw_parameters(source: str) -> list:
-    """Return [(param_name, member_var_name, description)] from declareAndLoadParameter calls."""
+    """Return [(param_name, member_var_name, description)] from parameter declarations."""
     params = []
+
     for call_body in find_cpp_call_bodies(source, 'declareAndLoadParameter'):
         args = split_cpp_arguments(call_body)
         if len(args) < 3:
             continue
 
-        name = extract_cpp_string_expression(args[0])
-        member_var_match = re.fullmatch(r'\w+', args[1].strip())
+        name = extract_cpp_string_literal_expression(args[0])
+        member_name = extract_parameter_member_name(args[1])
         description = extract_cpp_string_expression(args[2])
 
-        if not name or not member_var_match:
+        if not name or not member_name:
             continue
 
-        params.append((name, member_var_match.group(0), description))
+        params.append((name, member_name, description))
+
     return params
 
 
 def extract_python_launch_arguments(source: str) -> list:
     """Return [(name, default, description)] from DeclareLaunchArgument calls in a .py file."""
     results = []
-    for m in re.finditer(r'DeclareLaunchArgument\s*\(', source):
-        # Walk forward to find the matching closing parenthesis.
-        start, depth, i = m.end(), 1, m.end()
-        while i < len(source) and depth > 0:
-            if source[i] == '(':
-                depth += 1
-            elif source[i] == ')':
-                depth -= 1
-            i += 1
-        call_body = source[start:i - 1]
+    tree = ast.parse(source)
 
-        name_m = re.match(r'\s*"([^"]+)"', call_body)
-        if not name_m:
+    def call_keyword(call: ast.Call, name: str) -> ast.AST | None:
+        for keyword in call.keywords:
+            if keyword.arg == name:
+                return keyword.value
+        return None
+
+    def constant_string(node: ast.AST | None) -> Optional[str]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        return None
+
+    def render_default(node: ast.AST | None) -> str:
+        value = constant_string(node)
+        if value is not None:
+            return f'"{value}"'
+        if node is None:
+            return ''
+        return (ast.get_source_segment(source, node) or ast.unparse(node)).strip()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
             continue
-        name = name_m.group(1)
+        func_name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, 'attr', '')
+        if func_name != 'DeclareLaunchArgument' or not node.args:
+            continue
 
-        dv_m = re.search(r'default_value\s*=\s*"([^"]*)"', call_body)
-        if dv_m:
-            default = f'"{dv_m.group(1)}"'
-        else:
-            dv_expr = re.search(
-                r'default_value\s*=\s*(.+?)(?=,\s*\w+\s*=|\s*$)', call_body, re.DOTALL)
-            if dv_expr:
-                default = ' '.join(dv_expr.group(1).split())
-                default = re.sub(r'\(\s+', '(', default)
-                default = re.sub(r'\s+\)', ')', default)
-            else:
-                default = ''
+        name = constant_string(node.args[0])
+        if name is None:
+            continue
 
-        desc_m = re.search(r'description\s*=\s*"([^"]*)"', call_body)
-        description = desc_m.group(1) if desc_m else ''
+        default = render_default(call_keyword(node, 'default_value'))
+        description = constant_string(call_keyword(node, 'description')) or ''
 
         results.append((name, default, description))
     return results
@@ -629,7 +916,7 @@ def extract_launch_arguments(path: Path) -> list:
 def build_member_var_map(headers: list) -> dict:
     """Return {var_name: (cpp_type, default_str)} from member variable declarations."""
     pattern = re.compile(
-        r'\b(double|float|int|long|long\s+int|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|bool|std::string|std::vector\s*<[^>]+>)\s+(\w+_)\s*'
+        r'\b(double|float|int|long|long\s+int|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|bool|std::string|std::vector\s*<[^>]+>)\s+(\w+)\s*'
         r'(?:=\s*([^;]+))?;'
     )
     result = {}
@@ -658,10 +945,14 @@ def build_enum_value_map(headers: list) -> dict[str, str]:
 
 def build_type_alias_map(headers: list) -> dict:
     """Return {alias: full_cpp_type} from 'using Alias = FullType;' declarations."""
-    pattern = re.compile(r'\busing\s+(\w+)\s*=\s*([^;]+);')
+    using_pattern = re.compile(r'\busing\s+(\w+)\s*=\s*([^;]+);')
+    namespace_pattern = re.compile(r'\bnamespace\s+(\w+)\s*=\s*([^;]+);')
     result = {}
     for header in headers:
-        for m in pattern.finditer(header.read_text(errors='replace')):
+        source = header.read_text(errors='replace')
+        for m in using_pattern.finditer(source):
+            result[m.group(1).strip()] = m.group(2).strip()
+        for m in namespace_pattern.finditer(source):
             result[m.group(1).strip()] = m.group(2).strip()
     return result
 
@@ -830,20 +1121,27 @@ def build_interface_rows(
     manual_descriptions: dict[tuple, str],
     heading_path: tuple[str, ...],
     table_kind: str,
+    fallback_descriptions: Optional[dict[str, str]] = None,
 ) -> list[InterfaceTableRow]:
-    return [
-        InterfaceTableRow(
-            name=i.name,
-            interface_type=getattr(i, type_attr),
-            description=render_manual_cell(
-                manual_descriptions,
-                heading_path,
-                table_kind,
-                [f"`{i.name}`", f"`{getattr(i, type_attr)}`"],
-            ),
+    rows = []
+    fallback_descriptions = fallback_descriptions or {}
+    for i in interfaces:
+        description = render_manual_cell(
+            manual_descriptions,
+            heading_path,
+            table_kind,
+            [f"`{i.name}`", f"`{getattr(i, type_attr)}`"],
         )
-        for i in interfaces
-    ]
+        if description == 'TODO':
+            description = render_table_cell(fallback_descriptions.get(i.name, ''))
+        rows.append(
+            InterfaceTableRow(
+                name=i.name,
+                interface_type=getattr(i, type_attr),
+                description=description,
+            )
+        )
+    return rows
 
 
 def build_launch_argument_rows(
@@ -925,10 +1223,30 @@ def build_launch_file_contexts(
     return contexts
 
 
+def strip_rendered_string_default(value: str) -> str:
+    """Remove the display quotes used for string launch defaults."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return value[1:-1]
+    return value
+
+
+def build_topic_descriptions_from_launch_files(launch_files: list) -> dict[str, str]:
+    """Return topic descriptions keyed by default topic from launch remapping arguments."""
+    descriptions: dict[str, str] = {}
+    for launch_file in launch_files:
+        for _, default, description in extract_launch_arguments(launch_file):
+            topic = strip_rendered_string_default(default)
+            if topic.startswith('~/') and description:
+                descriptions.setdefault(topic, description)
+    return descriptions
+
+
 def build_node_context(
     node: NodeInterfaces,
     manual_descriptions: dict[tuple, str],
     manual_node_texts: dict[str, str],
+    topic_descriptions: dict[str, str],
 ) -> NodeTemplateContext:
     return NodeTemplateContext(
         node_name=node.node_name,
@@ -939,6 +1257,7 @@ def build_node_context(
             manual_descriptions,
             ('Nodes', f'`{node.node_name}`', 'Subscribed Topics'),
             'topic',
+            topic_descriptions,
         ),
         publishers=build_interface_rows(
             node.publishers,
@@ -946,6 +1265,7 @@ def build_node_context(
             manual_descriptions,
             ('Nodes', f'`{node.node_name}`', 'Published Topics'),
             'topic',
+            topic_descriptions,
         ),
         service_servers=build_interface_rows(
             node.service_servers,
@@ -1116,16 +1436,27 @@ def parse_repo_remote(remote: str) -> RepoMetadata:
     owner = '/'.join(path_parts[:-1])
     repo = path_parts[-1]
     owner_lower = owner.lower()
-    provider = 'github' if host.lower() == 'github.com' else 'other'
+    host_lower = host.lower()
+    provider = 'github' if host_lower == 'github.com' else 'gitlab' if host_lower.startswith('gitlab.') else 'other'
     repo_https_url = f'https://{host}/{path}'
 
-    pages_url = 'TODO'
+    pages_url = ''
     if provider == 'github':
         pages_url = f'https://{owner_lower}.github.io/{repo}'
+    elif provider == 'gitlab':
+        namespace_parts = owner_lower.split('/')
+        if namespace_parts:
+            pages_host = host_lower.removeprefix('gitlab.')
+            pages_path = '/'.join([*namespace_parts[1:], repo])
+            pages_url = f'https://{namespace_parts[0]}.pages.{pages_host}'
+            if pages_path:
+                pages_url = f'{pages_url}/{pages_path}'
 
-    container_image = 'TODO'
+    container_image = ''
     if provider == 'github':
         container_image = f'ghcr.io/{owner_lower}/{repo}:latest'
+    elif provider == 'gitlab':
+        container_image = f'{host}:5050/{path}:latest'
 
     return RepoMetadata(
         host=host,
@@ -1177,7 +1508,7 @@ def extract_pre_quickstart_block(readme_text: str) -> str:
         re.DOTALL,
     )
     if m is not None:
-        return m.group(1).strip()
+        return m.group(1)
     return PRE_QUICKSTART_PLACEHOLDER
 
 
@@ -1363,16 +1694,21 @@ def main():
             headers = find_headers(pkg_dir)
             member_var_map = build_member_var_map(headers)
             type_aliases = build_type_alias_map(headers)
+            topic_descriptions = build_topic_descriptions_from_launch_files(launch_files)
 
             for source_file in node_sources:
                 source = source_file.read_text(errors='replace')
+                source_context = '\n'.join([source, *(header.read_text(errors='replace') for header in headers)])
+                string_symbols = extract_cpp_string_symbols(source_context)
+                variable_types = extract_cpp_variable_types(source_context)
+                source_type_aliases = {**type_aliases, **build_type_alias_map([source_file])}
                 node = NodeInterfaces(
                     node_name=extract_node_name(source) or source_file.stem,
-                    subscribers=extract_subscribers(source, type_aliases),
-                    publishers=extract_publishers(source, type_aliases),
-                    service_servers=extract_service_servers(source, type_aliases),
-                    action_servers=extract_action_servers(source, type_aliases),
-                    action_clients=extract_action_clients(source, type_aliases),
+                    subscribers=extract_subscribers(source, source_type_aliases, string_symbols, variable_types),
+                    publishers=extract_publishers(source, source_type_aliases, string_symbols, variable_types),
+                    service_servers=extract_service_servers(source, source_type_aliases),
+                    action_servers=extract_action_servers(source, source_type_aliases),
+                    action_clients=extract_action_clients(source, source_type_aliases),
                     parameters=resolve_parameters(extract_raw_parameters(source), member_var_map, build_enum_value_map(headers)),
                 )
                 nodes.append(node)
@@ -1383,7 +1719,7 @@ def main():
                         title='Nodes',
                         kind='nodes',
                         nodes=[
-                            build_node_context(node, manual_descriptions, manual_node_texts)
+                            build_node_context(node, manual_descriptions, manual_node_texts, topic_descriptions)
                             for node in nodes
                         ],
                     )
