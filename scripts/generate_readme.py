@@ -317,6 +317,8 @@ def extract_cpp_string_symbols(source: str) -> dict[str, str]:
         rf'((?:(?:\w+)::)?\w+)\s*=\s*({string_literal})\s*;',
         rf'\b(?:static\s+)?(?:inline\s+)?(?:constexpr\s+)?(?:const\s+)?(?:std::string|char\s*(?:const)?\s*\*|const\s+char\s*\*)\s+'
         rf'((?:(?:\w+)::)?\w+)\s*\{{\s*({string_literal})\s*\}}\s*;',
+        rf'\b(?:static\s+)?(?:inline\s+)?(?:constexpr\s+)?(?:const\s+)?char\s+'
+        rf'((?:(?:\w+)::)?\w+)\s*\[[^\]]*\]\s*=\s*({string_literal})\s*;',
     )
     for pattern in const_patterns:
         for match in re.finditer(pattern, source):
@@ -344,10 +346,14 @@ def resolve_cpp_string_expression(expr: str, symbols: dict[str, str]) -> Optiona
     if resolve_match:
         return resolve_cpp_string_expression(resolve_match.group(1), symbols)
 
-    literal_pattern = re.compile(r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"', re.DOTALL)
-    literals = [decode_cpp_string_literal(match.group(1)) for match in literal_pattern.finditer(expr)]
-    if literals:
-        return ''.join(literals)
+    literal_expr_pattern = re.compile(r'(?:\s*(?:u8|u|U|L)?"((?:\\.|[^"\\])*"))+\s*\Z', re.DOTALL)
+    literal_expr_match = literal_expr_pattern.fullmatch(expr)
+    if literal_expr_match:
+        literal_pattern = re.compile(r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"', re.DOTALL)
+        return ''.join(
+            decode_cpp_string_literal(match.group(1))
+            for match in literal_pattern.finditer(expr)
+        )
 
     cleaned = re.sub(r'\bthis->', '', expr)
     cleaned = cleaned.strip('() ')
@@ -355,7 +361,7 @@ def resolve_cpp_string_expression(expr: str, symbols: dict[str, str]) -> Optiona
         return symbols[cleaned]
     if cleaned.split('::')[-1] in symbols:
         return symbols[cleaned.split('::')[-1]]
-    return None
+    return ' '.join(expr.split())
 
 
 def find_cpp_templated_call_bodies(source: str, function_name: str) -> list[tuple[str, str]]:
