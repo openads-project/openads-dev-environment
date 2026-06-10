@@ -33,10 +33,10 @@ jobs:
 
           python3 scripts/check_downstream_consistency.py \
             --markdown-report "${comment_file}" \
-            https://github.com/openads-project/openads_demo_module.git \
-            https://github.com/openads-project/trajectory_optimization.git \
             https://github.com/openads-project/ackermann_trajectory_control.git \
-            https://github.com/openads-project/lanelet2_map_server.git
+            https://github.com/openads-project/lanelet2_map_server.git \
+            https://github.com/openads-project/openads_demo_module.git \
+            https://github.com/openads-project/trajectory_optimization.git
 
           if [ ! -s "${comment_file}" ]; then
             echo "Downstream consistency report was not generated." | tee "${comment_file}" >> "${GITHUB_STEP_SUMMARY}"
