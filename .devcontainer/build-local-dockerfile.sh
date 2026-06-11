@@ -103,6 +103,13 @@ generate_docker_ros_env_file() {
                 return value
             }
 
+            function get_indent(line) {
+                if (match(line, /[^[:space:]]/)) {
+                    return RSTART - 1
+                }
+                return -1
+            }
+
             function normalize_env_value(value, quote) {
                 sub(/^[[:space:]]+/, "", value)
                 sub(/[[:space:]]+$/, "", value)
@@ -114,6 +121,8 @@ generate_docker_ros_env_file() {
             }
 
             BEGIN {
+                in_target_step = 0
+                step_indent = -1
                 in_with = 0
                 with_indent = -1
                 entry_count = 0
@@ -121,12 +130,32 @@ generate_docker_ros_env_file() {
 
             {
                 line = $0
+                indent = get_indent(line)
+
+                if (line ~ /^[[:space:]]*-[[:space:]]+/) {
+                    if (in_with && indent <= step_indent) {
+                        exit
+                    }
+
+                    step_indent = indent
+                    in_target_step = (line ~ /^[[:space:]]*-[[:space:]]+uses:[[:space:]]*ika-rwth-aachen\/docker-ros@/)
+                    in_with = 0
+                }
+
+                if (!in_target_step && step_indent >= 0 && indent == step_indent + 2 && line ~ /^[[:space:]]*uses:[[:space:]]*ika-rwth-aachen\/docker-ros@/) {
+                    in_target_step = 1
+                }
+
+                if (!in_target_step) {
+                    next
+                }
 
                 if (!in_with) {
                     if (line ~ /^[[:space:]]*with:[[:space:]]*$/) {
-                        match(line, /[^[:space:]]/)
-                        with_indent = RSTART - 1
-                        in_with = 1
+                        if (indent == step_indent + 2) {
+                            with_indent = indent
+                            in_with = 1
+                        }
                     }
                     next
                 }
@@ -135,8 +164,6 @@ generate_docker_ros_env_file() {
                     next
                 }
 
-                match(line, /[^[:space:]]/)
-                indent = RSTART - 1
                 if (indent <= with_indent) {
                     exit
                 }
