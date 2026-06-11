@@ -13,8 +13,11 @@
     "dockerfile": "Dockerfile.local"
   },
 
-  // launch dev container as dockeruser
+  // launch dev container as dockeruser (change to "root" for debugging with "ROS 2: Attach")
   "containerUser": "dockeruser",
+
+  // add SYS_PTRACE capability to allow debugging with "ROS 2: Attach"
+  "capAdd": ["SYS_PTRACE"],
 
   // set up git pre-commit hooks
   "postCreateCommand": "bash -lc 'if command -v pre-commit >/dev/null 2>&1 && [ -f .pre-commit-config.yaml ]; then pre-commit install --install-hooks; fi'",

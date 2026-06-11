@@ -2,6 +2,11 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "ROS 2: Attach",
+      "type": "ros2",
+      "request": "attach"
+    },
+    {
       "name": "ROS 2: Executable",
       "type": "cppdbg",
       "request": "launch",
@@ -39,7 +44,6 @@
       "console": "integratedTerminal",
       "justMyCode": false,
     },
-
     {
       "name": "Python: Current File",
       "type": "debugpy",

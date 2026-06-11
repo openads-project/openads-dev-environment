@@ -87,6 +87,7 @@ Select the *Run and Debug* view in the Activity Bar on the side of VS Code (*Ctr
 
 | Name | Description |
 | --- | --- |
+| ROS 2: Attach | Attach debugger to a running ROS executable (requires container to be started as `root`) |
 | ROS 2: Executable | Debug a ROS executable |
 | ROS 2: Launch File | Debug ROS nodes started by a launch file |
 | Python: ROS 2 Launch file | Debug a ROS 2 Python launch file using the Python debugger |
