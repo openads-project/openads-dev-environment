@@ -23,5 +23,7 @@ jobs:
           rmw-implementation: rmw_zenoh_cpp
           command: "echo 'TODO: no command set'"
           enable-industrial-ci: true
+          label-maintainer: TODO <TODO@TODO.com>
+          label-authors: TODO <TODO@TODO.com>
         env:
           TARGET_CMAKE_ARGS: -DCMAKE_EXPORT_COMPILE_COMMANDS=1
