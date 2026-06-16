@@ -193,6 +193,7 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
         raise FileNotFoundError(f"default launch directory not found: {launch_dir}")
 
     matching_launch_files: list[Path] = []
+    parsed_launch_files: list[tuple[Path, str]] = []
     errors: list[str] = []
     for launch_file in candidate_launch_files(launch_dir, package_name):
         try:
@@ -200,6 +201,7 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
         except Exception as exc:
             errors.append(f"{launch_file}: {exc}")
             continue
+        parsed_launch_files.append((launch_file, launch_data.package))
         if launch_data.package == package_name:
             matching_launch_files.append(launch_file)
 
@@ -208,9 +210,16 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
     if len(matching_launch_files) > 1:
         launch_files = ", ".join(str(path) for path in matching_launch_files)
         raise ValueError(f"multiple default launch files found for package {package_name!r}: {launch_files}")
+    if len(parsed_launch_files) == 1:
+        return parsed_launch_files[0][0]
 
     details = "\n".join(errors)
     message = f"default launch file for package {package_name!r} not found in {launch_dir}"
+    if parsed_launch_files:
+        launch_files = ", ".join(
+            f"{path} (launches package {node_package!r})" for path, node_package in parsed_launch_files
+        )
+        message = f"{message}\nparseable launch files: {launch_files}"
     if details:
         message = f"{message}\n{details}"
     raise FileNotFoundError(message)
@@ -513,11 +522,6 @@ def installed_params_path(package_name: str) -> str:
 def build_compose(repo_root: Path, gitlab_registry: str | None = None) -> str:
     package_metadata = find_default_package_metadata(repo_root)
     launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name))
-
-    if launch_data.package != package_metadata.name:
-        raise ValueError(
-            f"default launch package {launch_data.package!r} does not match package.xml name {package_metadata.name!r}"
-        )
 
     image_repository = container_image_repository(repo_root, package_metadata.name, gitlab_registry)
     arguments = sorted_launch_arguments(launch_data)
