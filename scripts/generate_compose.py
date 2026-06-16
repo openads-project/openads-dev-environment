@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import ast
 import difflib
+import os
 import re
 import subprocess
 import sys
@@ -30,6 +31,7 @@ except ModuleNotFoundError as exc:
 
 DEFAULT_NAMESPACE = "/"
 COMPOSE_PATH = Path("docker/compose/docker-compose.yml")
+GITLAB_REGISTRY_ENV_NAME = "OPENADS_GITLAB_REGISTRY"
 STANDARD_LAUNCH_ARGUMENT_NAMES = ("namespace", "name", "log_level", "use_sim_time", "params")
 
 
@@ -59,6 +61,13 @@ class PackageMetadata:
 class EnvironmentVariable:
     name: str
     value: str
+
+
+@dataclass(frozen=True)
+class RepoRemote:
+    host: str
+    port: str | None
+    path: str
 
 
 @dataclass(frozen=True)
@@ -261,37 +270,88 @@ def run_git(args: list[str], repo_root: Path) -> str:
     return result.stdout.strip()
 
 
-def github_owner_from_origin(repo_root: Path) -> str:
-    remote_url = run_git(["remote", "get-url", "origin"], repo_root)
-    patterns = (
-        r"^git@github\.com:([^/]+)/[^/]+(?:\.git)?$",
-        r"^https://github\.com/([^/]+)/[^/]+(?:\.git)?$",
-        r"^ssh://git@github\.com/([^/]+)/[^/]+(?:\.git)?$",
+def parse_repo_remote(remote_url: str) -> RepoRemote:
+    remote_url = remote_url.strip()
+    url_match = re.match(
+        r"^[a-z][a-z0-9+.-]*://(?:(?:[^@/]+)@)?([^/]+)/(.+?)(?:\.git)?/?$",
+        remote_url,
+        re.IGNORECASE,
     )
-    for pattern in patterns:
-        match = re.match(pattern, remote_url)
-        if match:
-            return match.group(1)
-    raise ValueError(f"origin remote is not a supported GitHub URL: {remote_url}")
+    ssh_match = re.match(r"^(?:[^@]+@)?([^:]+):(.+?)(?:\.git)?$", remote_url)
+
+    if url_match:
+        host, path = url_match.group(1), url_match.group(2)
+    elif ssh_match:
+        host, path = ssh_match.group(1), ssh_match.group(2)
+    else:
+        raise ValueError(f"origin remote is not a supported GitHub or GitLab URL: {remote_url}")
+
+    port: str | None = None
+    if ":" in host and not host.startswith("["):
+        host, port = host.rsplit(":", 1)
+
+    path_parts = [part for part in path.split("/") if part]
+    if len(path_parts) < 2:
+        raise ValueError(f"origin remote is not a supported GitHub or GitLab URL: {remote_url}")
+
+    return RepoRemote(host=host, port=port, path="/".join(path_parts))
 
 
-def github_owner_from_existing_compose(repo_root: Path, package_name: str) -> str | None:
+def gitlab_registry_host(remote: RepoRemote, registry: str | None) -> str:
+    if registry:
+        return registry.rstrip("/")
+    return f"{remote.host}:5050"
+
+
+def image_repository_from_reference(image_reference: str) -> str:
+    image_reference = image_reference.split("@", 1)[0]
+    last_slash_index = image_reference.rfind("/")
+    last_colon_index = image_reference.rfind(":")
+    if last_colon_index > last_slash_index:
+        return image_reference[:last_colon_index]
+    return image_reference
+
+
+def container_image_repository_from_existing_compose(repo_root: Path, package_name: str) -> str | None:
     compose_path = repo_root / COMPOSE_PATH
     if not compose_path.is_file():
         return None
-    pattern = re.compile(rf"image:\s*ghcr\.io/([^/\s]+)/{re.escape(package_name)}:")
-    match = pattern.search(compose_path.read_text(encoding="utf-8"))
-    return match.group(1) if match else None
+    for line in compose_path.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"\s*image:\s*(\S+)", line)
+        if not match:
+            continue
+        image_repository = image_repository_from_reference(match.group(1))
+        if image_repository.split("/")[-1] == package_name:
+            return image_repository
+    return None
 
 
-def github_owner(repo_root: Path, package_name: str) -> str:
+def container_image_repository(repo_root: Path, package_name: str, gitlab_registry: str | None) -> str:
+    remote_url = ""
     try:
-        return github_owner_from_origin(repo_root)
+        remote_url = run_git(["remote", "get-url", "origin"], repo_root)
+        remote = parse_repo_remote(remote_url)
     except ValueError:
-        owner = github_owner_from_existing_compose(repo_root, package_name)
-        if owner:
-            return owner
+        image_repository = container_image_repository_from_existing_compose(repo_root, package_name)
+        if image_repository:
+            return image_repository
         raise
+
+    host_lower = remote.host.lower()
+    namespace = "/".join(remote.path.split("/")[:-1])
+
+    if host_lower == "github.com":
+        return f"ghcr.io/{namespace}/{package_name}"
+    if host_lower.startswith("gitlab."):
+        if gitlab_registry is None:
+            image_repository = container_image_repository_from_existing_compose(repo_root, package_name)
+            if image_repository:
+                return image_repository
+        return f"{gitlab_registry_host(remote, gitlab_registry)}/{remote.path}"
+    image_repository = container_image_repository_from_existing_compose(repo_root, package_name)
+    if image_repository:
+        return image_repository
+    raise ValueError(f"origin remote is not a supported GitHub or GitLab URL: {remote_url}")
 
 
 def env_name(argument_name: str) -> str:
@@ -417,7 +477,7 @@ def installed_params_path(package_name: str) -> str:
     return f"/docker-ros/ws/install/{package_name}/share/{package_name}/config/params.yml"
 
 
-def build_compose(repo_root: Path) -> str:
+def build_compose(repo_root: Path, gitlab_registry: str | None = None) -> str:
     package_metadata = find_default_package_metadata(repo_root)
     launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name))
 
@@ -426,7 +486,7 @@ def build_compose(repo_root: Path) -> str:
             f"default launch package {launch_data.package!r} does not match package.xml name {package_metadata.name!r}"
         )
 
-    owner = github_owner(repo_root, package_metadata.name)
+    image_repository = container_image_repository(repo_root, package_metadata.name, gitlab_registry)
     arguments = sorted_launch_arguments(launch_data)
     input_variables, output_variables, other_topic_variables = topic_environment_variables(
         launch_data, repo_root / package_metadata.name / "README.md"
@@ -438,7 +498,7 @@ def build_compose(repo_root: Path) -> str:
 
     context = {
         "service_name": compose_service_name(package_metadata.name),
-        "image": f"ghcr.io/{owner}/{package_metadata.name}:v{package_metadata.version}",
+        "image": f"{image_repository}:v{package_metadata.version}",
         "namespace": DEFAULT_NAMESPACE,
         "node_name": node_name,
         "input_variables": input_variables,
@@ -500,6 +560,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate docker/compose/docker-compose.yml from the default launch file")
     parser.add_argument("repo_root", nargs="?", help="Repository root (defaults to inferred top-level)")
     parser.add_argument("--check", action="store_true", help="Check whether docker compose output is up to date")
+    parser.add_argument(
+        "--gitlab-registry",
+        default=os.environ.get(GITLAB_REGISTRY_ENV_NAME),
+        help=(
+            "GitLab container registry host, optionally including a port "
+            f"(defaults to ${GITLAB_REGISTRY_ENV_NAME}, an existing Compose image, or <gitlab-host>:5050)"
+        ),
+    )
     return parser
 
 
@@ -510,7 +578,7 @@ def main() -> int:
     compose_path = repo_root / COMPOSE_PATH
 
     try:
-        expected = build_compose(repo_root)
+        expected = build_compose(repo_root, gitlab_registry=args.gitlab_registry)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
