@@ -165,7 +165,7 @@ To check whether the committed Compose file is up to date without changing it, r
 
 The generator expects a ROS package subdirectory with a default launch file in `launch/`. The launch file must define the launched `Node`, `DeclareLaunchArgument(...)` entries, and a `remappable_topics` list for topic remaps that should be exposed as Compose environment variables.
 
-For GitLab remotes, the generator uses the registry from an existing Compose image when available. Otherwise, override the derived registry with `--gitlab-registry <host[:port]>` or `OPENADS_GITLAB_REGISTRY`; if neither is set, it falls back to `<gitlab-host>:5050`.
+For GitLab remotes, the generator uses the registry from an existing Compose file when available. Otherwise, override the derived registry with `--gitlab-registry <host[:port]>` or `OPENADS_GITLAB_REGISTRY`; if neither is set, it falls back to `<gitlab-host>:5050`.
 
 ### Consistency Checker
 
