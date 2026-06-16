@@ -565,7 +565,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=os.environ.get(GITLAB_REGISTRY_ENV_NAME),
         help=(
             "GitLab container registry host, optionally including a port "
-            f"(defaults to ${GITLAB_REGISTRY_ENV_NAME}, an existing Compose image, or <gitlab-host>:5050)"
+            f"(defaults to ${GITLAB_REGISTRY_ENV_NAME}, an existing Compose file, or <gitlab-host>:5050)"
         ),
     )
     return parser
