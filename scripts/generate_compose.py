@@ -234,15 +234,48 @@ def discover_package_metadata(repo_root: Path) -> list[PackageMetadata]:
     return metadata
 
 
+def package_metadata_for_subdirectory(repo_root: Path, package_name: str) -> PackageMetadata | None:
+    package_xml = repo_root / package_name / "package.xml"
+    if not package_xml.is_file():
+        return None
+
+    package_metadata = parse_package_metadata(package_xml)
+    if package_metadata.name != package_name:
+        raise ValueError(
+            f"default package.xml name {package_metadata.name!r} does not match package name {package_name!r}"
+        )
+    return package_metadata
+
+
+def repository_name_from_origin(repo_root: Path) -> str | None:
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=repo_root,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        return None
+
+    remote_url = result.stdout.strip().removesuffix(".git").rstrip("/")
+    if not remote_url:
+        return None
+
+    return remote_url[max(remote_url.rfind("/"), remote_url.rfind(":")) + 1 :]
+
+
 def find_default_package_metadata(repo_root: Path) -> PackageMetadata:
-    package_xml = repo_root / repo_root.name / "package.xml"
-    if package_xml.is_file():
-        package_metadata = parse_package_metadata(package_xml)
-        if package_metadata.name != repo_root.name:
-            raise ValueError(
-                f"default package.xml name {package_metadata.name!r} does not match repository name {repo_root.name!r}"
-            )
+    package_metadata = package_metadata_for_subdirectory(repo_root, repo_root.name)
+    if package_metadata is not None:
         return package_metadata
+
+    origin_repository_name = repository_name_from_origin(repo_root)
+    if origin_repository_name and origin_repository_name != repo_root.name:
+        package_metadata = package_metadata_for_subdirectory(repo_root, origin_repository_name)
+        if package_metadata is not None:
+            return package_metadata
 
     packages = discover_package_metadata(repo_root)
     if len(packages) == 1:
