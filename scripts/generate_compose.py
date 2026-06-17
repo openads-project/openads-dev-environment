@@ -545,7 +545,7 @@ def build_compose(repo_root: Path, gitlab_registry: str | None = None) -> str:
         "log_level": log_level,
         "use_sim_time": use_sim_time,
         "params_default_path": params_default_path,
-        "launch_package": launch_data.package,
+        "launch_package": package_metadata.name,
         "launch_file_name": launch_data.launch_file_name,
         "launch_arguments": [
             LaunchCommandArgument(name=argument_name, env_name=env_name(argument_name))
