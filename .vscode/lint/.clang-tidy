@@ -15,11 +15,9 @@ Checks: >
   -readability-avoid-const-params-in-decls,
   -readability-function-cognitive-complexity,
   -readability-identifier-length,
-  -readability-implicit-bool-conversion,
   -readability-isolate-declaration,
   -readability-magic-numbers,
-  -readability-qualified-auto,
-  -readability-redundant-string-cstr
+  -readability-qualified-auto
 CheckOptions:
   - key: readability-braces-around-statements.ShortStatementLines
     value: 2
