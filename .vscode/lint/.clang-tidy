@@ -11,7 +11,7 @@ Checks: >
   google-*,
   -google-build-using-namespace,
   -google-runtime-references,
-  readability-*
+  readability-*,
   -readability-implicit-bool-conversion,
   -readability-magic-numbers,
   -readability-qualified-auto,
