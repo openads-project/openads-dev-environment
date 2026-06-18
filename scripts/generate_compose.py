@@ -134,7 +134,7 @@ def extract_remappable_topic_names(tree: ast.AST) -> list[str]:
             topic_names.append(launch_argument.name)
         return topic_names
 
-    raise ValueError("default launch file does not define remappable_topics")
+    return []
 
 
 def extract_launch_arguments(tree: ast.AST) -> list[LaunchArgument]:
@@ -154,22 +154,31 @@ def extract_launch_arguments(tree: ast.AST) -> list[LaunchArgument]:
     return arguments
 
 
-def extract_node_data(tree: ast.AST) -> tuple[str, str | None]:
+def extract_node_data(tree: ast.AST, package_name: str) -> tuple[str, str | None]:
     nodes = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and call_name(node.func) == "Node"]
-    if len(nodes) != 1:
-        raise ValueError(f"default launch file must define exactly one Node call, found {len(nodes)}")
+    if not nodes:
+        raise ValueError("default launch file must define at least one Node call")
 
-    node = nodes[0]
-    package = constant_string(call_keyword(node, "package"))
-    executable = constant_string(call_keyword(node, "executable"))
-    if package is None:
-        raise ValueError("Node package must be a string literal")
-    return package, executable
+    node_data: list[tuple[str, str | None]] = []
+    for node in nodes:
+        package = constant_string(call_keyword(node, "package"))
+        executable = constant_string(call_keyword(node, "executable"))
+        if package is None:
+            raise ValueError("Node package must be a string literal")
+        node_data.append((package, executable))
+
+    matching_nodes = [node for node in node_data if node[0] == package_name]
+    if not matching_nodes:
+        package_list = ", ".join(sorted({package for package, _ in node_data}))
+        raise ValueError(f"default launch file must launch package {package_name!r}; found packages: {package_list}")
+
+    executables = {executable for _, executable in matching_nodes}
+    return package_name, executables.pop() if len(executables) == 1 else None
 
 
-def parse_launch_file(launch_file: Path) -> LaunchData:
+def parse_launch_file(launch_file: Path, package_name: str) -> LaunchData:
     tree = ast.parse(launch_file.read_text(encoding="utf-8"), filename=str(launch_file))
-    package, executable = extract_node_data(tree)
+    package, executable = extract_node_data(tree, package_name)
     return LaunchData(
         package=package,
         executable=executable,
@@ -197,7 +206,7 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
     errors: list[str] = []
     for launch_file in candidate_launch_files(launch_dir, package_name):
         try:
-            launch_data = parse_launch_file(launch_file)
+            launch_data = parse_launch_file(launch_file, package_name)
         except Exception as exc:
             errors.append(f"{launch_file}: {exc}")
             continue
@@ -216,9 +225,7 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
     details = "\n".join(errors)
     message = f"default launch file for package {package_name!r} not found in {launch_dir}"
     if parsed_launch_files:
-        launch_files = ", ".join(
-            f"{path} (launches package {node_package!r})" for path, node_package in parsed_launch_files
-        )
+        launch_files = ", ".join(f"{path} (launches package {node_package!r})" for path, node_package in parsed_launch_files)
         message = f"{message}\nparseable launch files: {launch_files}"
     if details:
         message = f"{message}\n{details}"
@@ -250,9 +257,7 @@ def package_metadata_for_subdirectory(repo_root: Path, package_name: str) -> Pac
 
     package_metadata = parse_package_metadata(package_xml)
     if package_metadata.name != package_name:
-        raise ValueError(
-            f"default package.xml name {package_metadata.name!r} does not match package name {package_name!r}"
-        )
+        raise ValueError(f"default package.xml name {package_metadata.name!r} does not match package name {package_name!r}")
     return package_metadata
 
 
@@ -494,8 +499,7 @@ def topic_environment_variables(
 def build_template_environment() -> Environment:
     if Environment is None or FileSystemLoader is None:
         raise RuntimeError(
-            "Missing dependency: jinja2. Install with "
-            "`pip install -r .openads-dev-environment/scripts/requirements.txt`."
+            "Missing dependency: jinja2. Install with " "`pip install -r .openads-dev-environment/scripts/requirements.txt`."
         )
     templates_dir = Path(__file__).resolve().parent / "templates"
     return Environment(
@@ -521,7 +525,7 @@ def installed_params_path(package_name: str) -> str:
 
 def build_compose(repo_root: Path, gitlab_registry: str | None = None) -> str:
     package_metadata = find_default_package_metadata(repo_root)
-    launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name))
+    launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name), package_metadata.name)
 
     image_repository = container_image_repository(repo_root, package_metadata.name, gitlab_registry)
     arguments = sorted_launch_arguments(launch_data)
