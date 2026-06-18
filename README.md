@@ -49,8 +49,8 @@ This repository defines a common development environment for and enforces consis
     ```
 7. *(optional)* [Check consistency]((#consistency-checker) of your repository with OpenADS conventions.
    ```bash
-    .openads-dev-environment/scripts/check_repository_consistency.py
-    ```
+   .openads-dev-environment/scripts/check_repository_consistency.py
+   ```
 
 
 ## Details
