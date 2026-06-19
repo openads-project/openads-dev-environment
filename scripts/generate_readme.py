@@ -244,10 +244,28 @@ def format_default(default_str: Optional[str], cpp_type: str, enum_value_map: di
 # Discovery
 # ---------------------------------------------------------------------------
 
+def git_tracked_files(repo_root: Path) -> list[Path]:
+    """Return files tracked by the target repository without descending into submodules."""
+    result = subprocess.run(
+        ['git', 'ls-files', '-z'],
+        cwd=repo_root,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or 'git ls-files failed')
+    return [repo_root / path for path in result.stdout.split('\0') if path]
+
+
 def find_packages(repo_root: Path) -> list:
     """Return [(package_name, package_dir, package_description)] for ROS packages."""
     packages = []
-    for pkg_xml in sorted(repo_root.rglob('package.xml')):
+    package_xmls = sorted(path for path in git_tracked_files(repo_root) if path.name == 'package.xml')
+    for pkg_xml in package_xmls:
+        if not pkg_xml.is_file():
+            continue
         try:
             root = ElementTree.parse(pkg_xml).getroot()
             name_el = root.find('name')
