@@ -44,8 +44,7 @@ class LaunchArgument:
 
 @dataclass(frozen=True)
 class LaunchData:
-    package: str
-    executable: str | None
+    node_packages: frozenset[str]
     launch_file_name: str
     arguments: list[LaunchArgument]
     remappable_topic_names: list[str]
@@ -154,34 +153,25 @@ def extract_launch_arguments(tree: ast.AST) -> list[LaunchArgument]:
     return arguments
 
 
-def extract_node_data(tree: ast.AST, package_name: str) -> tuple[str, str | None]:
+def extract_node_packages(tree: ast.AST) -> frozenset[str]:
     nodes = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and call_name(node.func) == "Node"]
     if not nodes:
         raise ValueError("default launch file must define at least one Node call")
 
-    node_data: list[tuple[str, str | None]] = []
+    packages: set[str] = set()
     for node in nodes:
         package = constant_string(call_keyword(node, "package"))
-        executable = constant_string(call_keyword(node, "executable"))
         if package is None:
             raise ValueError("Node package must be a string literal")
-        node_data.append((package, executable))
+        packages.add(package)
 
-    matching_nodes = [node for node in node_data if node[0] == package_name]
-    if not matching_nodes:
-        package_list = ", ".join(sorted({package for package, _ in node_data}))
-        raise ValueError(f"default launch file must launch package {package_name!r}; found packages: {package_list}")
-
-    executables = {executable for _, executable in matching_nodes}
-    return package_name, executables.pop() if len(executables) == 1 else None
+    return frozenset(packages)
 
 
-def parse_launch_file(launch_file: Path, package_name: str) -> LaunchData:
+def parse_launch_file(launch_file: Path) -> LaunchData:
     tree = ast.parse(launch_file.read_text(encoding="utf-8"), filename=str(launch_file))
-    package, executable = extract_node_data(tree, package_name)
     return LaunchData(
-        package=package,
-        executable=executable,
+        node_packages=extract_node_packages(tree),
         launch_file_name=launch_file.name,
         arguments=extract_launch_arguments(tree),
         remappable_topic_names=extract_remappable_topic_names(tree),
@@ -202,16 +192,16 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
         raise FileNotFoundError(f"default launch directory not found: {launch_dir}")
 
     matching_launch_files: list[Path] = []
-    parsed_launch_files: list[tuple[Path, str]] = []
+    parsed_launch_files: list[tuple[Path, frozenset[str]]] = []
     errors: list[str] = []
     for launch_file in candidate_launch_files(launch_dir, package_name):
         try:
-            launch_data = parse_launch_file(launch_file, package_name)
+            launch_data = parse_launch_file(launch_file)
         except Exception as exc:
             errors.append(f"{launch_file}: {exc}")
             continue
-        parsed_launch_files.append((launch_file, launch_data.package))
-        if launch_data.package == package_name:
+        parsed_launch_files.append((launch_file, launch_data.node_packages))
+        if package_name in launch_data.node_packages:
             matching_launch_files.append(launch_file)
 
     if len(matching_launch_files) == 1:
@@ -225,7 +215,10 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
     details = "\n".join(errors)
     message = f"default launch file for package {package_name!r} not found in {launch_dir}"
     if parsed_launch_files:
-        launch_files = ", ".join(f"{path} (launches package {node_package!r})" for path, node_package in parsed_launch_files)
+        launch_files = ", ".join(
+            f"{path} (launches packages: {', '.join(sorted(node_packages))})"
+            for path, node_packages in parsed_launch_files
+        )
         message = f"{message}\nparseable launch files: {launch_files}"
     if details:
         message = f"{message}\n{details}"
@@ -525,7 +518,7 @@ def installed_params_path(package_name: str) -> str:
 
 def build_compose(repo_root: Path, gitlab_registry: str | None = None) -> str:
     package_metadata = find_default_package_metadata(repo_root)
-    launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name), package_metadata.name)
+    launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name))
 
     image_repository = container_image_repository(repo_root, package_metadata.name, gitlab_registry)
     arguments = sorted_launch_arguments(launch_data)
