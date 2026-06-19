@@ -495,8 +495,9 @@ def check_cpp_code_has_doxygen_docs(ctx: CheckContext) -> CheckResult:
 
 def discover_ros_package_dirs(repo_root: Path) -> list[Path]:
     package_dirs: list[Path] = []
-    for pkg_xml in sorted(repo_root.rglob("package.xml")):
-        if pkg_xml.parent == repo_root:
+    tracked_package_xmls = sorted(path for path in git_tracked_files(repo_root) if path.name == "package.xml")
+    for pkg_xml in tracked_package_xmls:
+        if pkg_xml.parent == repo_root or not pkg_xml.is_file():
             continue
         package_dirs.append(pkg_xml.parent)
     return package_dirs

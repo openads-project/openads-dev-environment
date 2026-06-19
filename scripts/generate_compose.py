@@ -44,8 +44,7 @@ class LaunchArgument:
 
 @dataclass(frozen=True)
 class LaunchData:
-    package: str
-    executable: str | None
+    node_packages: frozenset[str]
     launch_file_name: str
     arguments: list[LaunchArgument]
     remappable_topic_names: list[str]
@@ -134,7 +133,7 @@ def extract_remappable_topic_names(tree: ast.AST) -> list[str]:
             topic_names.append(launch_argument.name)
         return topic_names
 
-    raise ValueError("default launch file does not define remappable_topics")
+    return []
 
 
 def extract_launch_arguments(tree: ast.AST) -> list[LaunchArgument]:
@@ -154,25 +153,25 @@ def extract_launch_arguments(tree: ast.AST) -> list[LaunchArgument]:
     return arguments
 
 
-def extract_node_data(tree: ast.AST) -> tuple[str, str | None]:
+def extract_node_packages(tree: ast.AST) -> frozenset[str]:
     nodes = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and call_name(node.func) == "Node"]
-    if len(nodes) != 1:
-        raise ValueError(f"default launch file must define exactly one Node call, found {len(nodes)}")
+    if not nodes:
+        raise ValueError("default launch file must define at least one Node call")
 
-    node = nodes[0]
-    package = constant_string(call_keyword(node, "package"))
-    executable = constant_string(call_keyword(node, "executable"))
-    if package is None:
-        raise ValueError("Node package must be a string literal")
-    return package, executable
+    packages: set[str] = set()
+    for node in nodes:
+        package = constant_string(call_keyword(node, "package"))
+        if package is None:
+            raise ValueError("Node package must be a string literal")
+        packages.add(package)
+
+    return frozenset(packages)
 
 
 def parse_launch_file(launch_file: Path) -> LaunchData:
     tree = ast.parse(launch_file.read_text(encoding="utf-8"), filename=str(launch_file))
-    package, executable = extract_node_data(tree)
     return LaunchData(
-        package=package,
-        executable=executable,
+        node_packages=extract_node_packages(tree),
         launch_file_name=launch_file.name,
         arguments=extract_launch_arguments(tree),
         remappable_topic_names=extract_remappable_topic_names(tree),
@@ -193,7 +192,7 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
         raise FileNotFoundError(f"default launch directory not found: {launch_dir}")
 
     matching_launch_files: list[Path] = []
-    parsed_launch_files: list[tuple[Path, str]] = []
+    parsed_launch_files: list[tuple[Path, frozenset[str]]] = []
     errors: list[str] = []
     for launch_file in candidate_launch_files(launch_dir, package_name):
         try:
@@ -201,8 +200,8 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
         except Exception as exc:
             errors.append(f"{launch_file}: {exc}")
             continue
-        parsed_launch_files.append((launch_file, launch_data.package))
-        if launch_data.package == package_name:
+        parsed_launch_files.append((launch_file, launch_data.node_packages))
+        if package_name in launch_data.node_packages:
             matching_launch_files.append(launch_file)
 
     if len(matching_launch_files) == 1:
@@ -217,7 +216,8 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
     message = f"default launch file for package {package_name!r} not found in {launch_dir}"
     if parsed_launch_files:
         launch_files = ", ".join(
-            f"{path} (launches package {node_package!r})" for path, node_package in parsed_launch_files
+            f"{path} (launches packages: {', '.join(sorted(node_packages))})"
+            for path, node_packages in parsed_launch_files
         )
         message = f"{message}\nparseable launch files: {launch_files}"
     if details:

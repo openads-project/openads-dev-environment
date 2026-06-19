@@ -1,0 +1,28 @@
+services:
+
+  sample-pkg-no-params:
+    image: ghcr.io/openads-project/sample_pkg_no_params:v1.0.0
+    environment:
+      # --- name ------
+      NAMESPACE: /
+      NAME: sample_pkg_no_params
+      # --- inputs ----
+      INPUT_TOPIC: ~/input
+      # --- outputs ---
+      OUTPUT_TOPIC: ~/output
+      # --- other -----
+      SERVICE_TOPIC: ~/service
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      USE_SIM_TIME: ${USE_SIM_TIME:-false}
+    command:
+      - /bin/bash
+      - -ic
+      - |
+        ros2 launch sample_pkg_no_params no_params.launch.py \
+          namespace:=$${NAMESPACE} \
+          name:=$${NAME} \
+          log_level:=$${LOG_LEVEL} \
+          use_sim_time:=$${USE_SIM_TIME} \
+          input_topic:=$${INPUT_TOPIC} \
+          output_topic:=$${OUTPUT_TOPIC} \
+          service_topic:=$${SERVICE_TOPIC}
