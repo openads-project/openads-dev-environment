@@ -1,0 +1,19 @@
+services:
+
+  sample-pkg-no-remappings:
+    image: ghcr.io/openads-project/sample_pkg_no_remappings:v1.0.0
+    environment:
+      # --- name ------
+      NAMESPACE: /
+      NAME: sample_pkg_no_remappings
+      # --- other -----
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      USE_SIM_TIME: ${USE_SIM_TIME:-false}
+    command:
+      - /bin/bash
+      - -ic
+      - |
+        ros2 launch sample_pkg_no_remappings no_remappings.launch.py \
+          namespace:=$${NAMESPACE} \
+          log_level:=$${LOG_LEVEL} \
+          use_sim_time:=$${USE_SIM_TIME}
