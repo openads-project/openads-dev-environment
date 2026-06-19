@@ -35,6 +35,7 @@ jobs:
             --markdown-report "${comment_file}" \
             https://github.com/openads-project/ackermann_trajectory_control.git \
             https://github.com/openads-project/lanelet2_map_server.git \
+            https://github.com/openads-project/lanelet2_route_planning.git \
             https://github.com/openads-project/openads_demo_module.git \
             https://github.com/openads-project/trajectory_optimization.git
 
