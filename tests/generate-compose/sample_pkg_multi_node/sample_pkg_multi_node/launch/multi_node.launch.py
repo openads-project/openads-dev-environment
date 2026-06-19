@@ -15,13 +15,10 @@ from launch_ros.actions import Node, SetParameter
 def generate_launch_description():
     """Generate the launch description for the sample_pkg_multi_node and other_pkg nodes."""
 
-    remappable_topics_sample = [
+    remappable_topics = [
         DeclareLaunchArgument("input_topic", default_value="~/input"),
         DeclareLaunchArgument("output_topic", default_value="~/output"),
         DeclareLaunchArgument("service_topic", default_value="~/service"),
-    ]
-
-    remappable_topics_other = [
         DeclareLaunchArgument("input_topic_other", default_value="~/input_other"),
         DeclareLaunchArgument("output_topic_other", default_value="~/output_other"),
         DeclareLaunchArgument("service_topic_other", default_value="~/service_other"),
@@ -44,8 +41,7 @@ def generate_launch_description():
             "log_level", default_value="info", description="ROS logging level (debug, info, warn, error, fatal)"
         ),
         DeclareLaunchArgument("use_sim_time", default_value="false", description="use simulation clock"),
-        *remappable_topics_sample,
-        *remappable_topics_other,
+        *remappable_topics,
     ]
 
     nodes = [
@@ -56,7 +52,7 @@ def generate_launch_description():
             name=LaunchConfiguration("name"),
             parameters=[LaunchConfiguration("params")],
             arguments=["--ros-args", "--log-level", LaunchConfiguration("log_level")],
-            remappings=[(la.default_value[0].text, LaunchConfiguration(la.name)) for la in remappable_topics_sample],
+            remappings=[(la.default_value[0].text, LaunchConfiguration(la.name)) for la in remappable_topics],
             output="screen",
             emulate_tty=True,
         ),
@@ -67,7 +63,7 @@ def generate_launch_description():
             name=[LaunchConfiguration("name"), "_other"],
             parameters=[LaunchConfiguration("params_other")],
             arguments=["--ros-args", "--log-level", LaunchConfiguration("log_level")],
-            remappings=[(la.default_value[0].text, LaunchConfiguration(la.name)) for la in remappable_topics_other],
+            remappings=[(la.default_value[0].text, LaunchConfiguration(la.name)) for la in remappable_topics],
             output="screen",
             emulate_tty=True,
         )
