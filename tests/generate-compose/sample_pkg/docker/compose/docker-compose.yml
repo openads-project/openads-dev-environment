@@ -1,0 +1,30 @@
+services:
+
+  sample-pkg:
+    image: ghcr.io/openads-project/sample_pkg:v1.0.0
+    environment:
+      # --- name ------
+      NAMESPACE: /
+      NAME: sample_pkg
+      # --- other -----
+      INPUT_TOPIC: ~/input
+      OUTPUT_TOPIC: ~/output
+      SERVICE_TOPIC: ~/service
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      USE_SIM_TIME: ${USE_SIM_TIME:-false}
+      PARAMS: ${PARAMS:-/docker-ros/ws/install/sample_pkg/share/sample_pkg/config/params.yml}
+    command:
+      - /bin/bash
+      - -ic
+      - |
+        ros2 launch sample_pkg sample_pkg.launch.py \
+          namespace:=$${NAMESPACE} \
+          name:=$${NAME} \
+          log_level:=$${LOG_LEVEL} \
+          use_sim_time:=$${USE_SIM_TIME} \
+          params:=$${PARAMS} \
+          input_topic:=$${INPUT_TOPIC} \
+          output_topic:=$${OUTPUT_TOPIC} \
+          service_topic:=$${SERVICE_TOPIC}
+    # volumes:
+    #   - ./params.yml:/docker-ros/ws/install/sample_pkg/share/sample_pkg/config/params.yml
