@@ -6,16 +6,18 @@ services:
       # --- name ------
       NAMESPACE: /
       NAME: sample_pkg_multi_node
+      # --- inputs ----
+      INPUT_TOPIC: ~/input
+      INPUT_TOPIC_OTHER: ~/input_other
+      # --- outputs ---
+      OUTPUT_TOPIC: ~/output
+      OUTPUT_TOPIC_OTHER: ~/output_other
       # --- other -----
+      SERVICE_TOPIC: ~/service
+      SERVICE_TOPIC_OTHER: ~/service_other
       LOG_LEVEL: ${LOG_LEVEL:-info}
       USE_SIM_TIME: ${USE_SIM_TIME:-false}
       PARAMS: ${PARAMS:-/docker-ros/ws/install/sample_pkg_multi_node/share/sample_pkg_multi_node/config/params.yml}
-      INPUT_TOPIC: ${INPUT_TOPIC:-~/input}
-      OUTPUT_TOPIC: ${OUTPUT_TOPIC:-~/output}
-      SERVICE_TOPIC: ${SERVICE_TOPIC:-~/service}
-      INPUT_TOPIC_OTHER: ${INPUT_TOPIC_OTHER:-~/input_other}
-      OUTPUT_TOPIC_OTHER: ${OUTPUT_TOPIC_OTHER:-~/output_other}
-      SERVICE_TOPIC_OTHER: ${SERVICE_TOPIC_OTHER:-~/service_other}
       PARAMS_OTHER: ${PARAMS_OTHER:-}
     command:
       - /bin/bash
@@ -27,12 +29,12 @@ services:
           log_level:=$${LOG_LEVEL} \
           use_sim_time:=$${USE_SIM_TIME} \
           params:=$${PARAMS} \
+          params_other:=$${PARAMS_OTHER} \
           input_topic:=$${INPUT_TOPIC} \
           output_topic:=$${OUTPUT_TOPIC} \
           service_topic:=$${SERVICE_TOPIC} \
           input_topic_other:=$${INPUT_TOPIC_OTHER} \
           output_topic_other:=$${OUTPUT_TOPIC_OTHER} \
-          service_topic_other:=$${SERVICE_TOPIC_OTHER} \
-          params_other:=$${PARAMS_OTHER}
+          service_topic_other:=$${SERVICE_TOPIC_OTHER}
     # volumes:
     #   - ./params.yml:/docker-ros/ws/install/sample_pkg_multi_node/share/sample_pkg_multi_node/config/params.yml

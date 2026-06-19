@@ -6,9 +6,11 @@ services:
       # --- name ------
       NAMESPACE: /
       NAME: sample_pkg_other_launch
-      # --- other -----
+      # --- inputs ----
       INPUT_TOPIC: ~/input
+      # --- outputs ---
       OUTPUT_TOPIC: ~/output
+      # --- other -----
       SERVICE_TOPIC: ~/service
       LOG_LEVEL: ${LOG_LEVEL:-info}
       USE_SIM_TIME: ${USE_SIM_TIME:-false}

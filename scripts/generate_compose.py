@@ -250,7 +250,9 @@ def package_metadata_for_subdirectory(repo_root: Path, package_name: str) -> Pac
 
     package_metadata = parse_package_metadata(package_xml)
     if package_metadata.name != package_name:
-        raise ValueError(f"default package.xml name {package_metadata.name!r} does not match package name {package_name!r}")
+        raise ValueError(
+            f"default package.xml name {package_metadata.name!r} does not match package name {package_name!r}"
+        )
     return package_metadata
 
 
@@ -492,7 +494,8 @@ def topic_environment_variables(
 def build_template_environment() -> Environment:
     if Environment is None or FileSystemLoader is None:
         raise RuntimeError(
-            "Missing dependency: jinja2. Install with " "`pip install -r .openads-dev-environment/scripts/requirements.txt`."
+            "Missing dependency: jinja2. Install with "
+            "`pip install -r .openads-dev-environment/scripts/requirements.txt`."
         )
     templates_dir = Path(__file__).resolve().parent / "templates"
     return Environment(
