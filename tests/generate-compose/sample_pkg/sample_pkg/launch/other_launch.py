@@ -38,8 +38,8 @@ def generate_launch_description():
 
     nodes = [
         Node(
-            package="other_pkg",
-            executable="other_pkg",
+            package="sample_pkg",
+            executable="sample_pkg",
             namespace=LaunchConfiguration("namespace"),
             name=LaunchConfiguration("name"),
             parameters=[LaunchConfiguration("params")],

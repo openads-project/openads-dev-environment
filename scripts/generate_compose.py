@@ -191,6 +191,7 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
     if not launch_dir.is_dir():
         raise FileNotFoundError(f"default launch directory not found: {launch_dir}")
 
+    preferred_launch_file = launch_dir / f"{package_name}_launch.py"
     matching_launch_files: list[Path] = []
     parsed_launch_files: list[tuple[Path, frozenset[str]]] = []
     errors: list[str] = []
@@ -207,6 +208,8 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
     if len(matching_launch_files) == 1:
         return matching_launch_files[0]
     if len(matching_launch_files) > 1:
+        if preferred_launch_file in matching_launch_files:
+            return preferred_launch_file
         launch_files = ", ".join(str(path) for path in matching_launch_files)
         raise ValueError(f"multiple default launch files found for package {package_name!r}: {launch_files}")
     if len(parsed_launch_files) == 1:
