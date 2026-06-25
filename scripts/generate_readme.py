@@ -1040,6 +1040,14 @@ def render_parameter_default(content: str) -> str:
     return normalized if normalized else '-'
 
 
+def render_mermaid_edge_label(content: str) -> str:
+    """Quote Mermaid edge labels only when their syntax requires it."""
+    sanitized = content.replace('"', "'")
+    if re.search(r'[\[\]{}()|]', sanitized):
+        return f'"{sanitized}"'
+    return sanitized
+
+
 def manual_key(heading_path: tuple[str, ...], table_kind: str, row_cells: list[str]) -> tuple:
     return (
         tuple(heading_path),
@@ -1463,13 +1471,15 @@ def build_template_environment() -> Environment:
             '`pip install -r .openads-dev-environment/scripts/requirements.txt`.'
         )
     templates_dir = Path(__file__).resolve().parent / 'templates'
-    return Environment(
+    environment = Environment(
         loader=FileSystemLoader(str(templates_dir)),
         autoescape=False,
         keep_trailing_newline=True,
         trim_blocks=False,
         lstrip_blocks=False,
     )
+    environment.filters['mermaid_edge_label'] = render_mermaid_edge_label
+    return environment
 
 
 def render_template(template_env: Environment, template_name: str, context: dict) -> str:
