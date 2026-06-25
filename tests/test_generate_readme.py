@@ -136,3 +136,10 @@ def test_render_indexed_topic_as_quoted_mermaid_label() -> None:
     )
 
     assert '-->|"input_topics_[i]"| NODE' in rendered
+
+
+def test_render_ordinary_topic_as_unquoted_mermaid_label() -> None:
+    """Preserve existing Mermaid output for labels without special syntax."""
+    generator = load_generator()
+
+    assert generator.render_mermaid_edge_label("~/point_cloud") == "~/point_cloud"
