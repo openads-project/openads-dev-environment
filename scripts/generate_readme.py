@@ -52,6 +52,10 @@ TRANSPORT_MESSAGE_TYPES = {
     'point_cloud_transport': 'sensor_msgs/msg/PointCloud2',
 }
 
+TRANSPORT_SUBSCRIBE_TOPIC_ARGUMENTS = {
+    'point_cloud_transport::SubscriberFilter': 1,
+}
+
 
 @dataclass
 class ActionInterface:
@@ -466,6 +470,12 @@ def extract_cpp_variable_types(source: str) -> dict[str, str]:
         cpp_type = unwrap_cpp_type(match.group(1))
         variable_types[match.group(2)] = cpp_type
 
+    make_shared_pattern = re.compile(
+        r'\bauto\s+(\w+)\s*=\s*std::make_shared\s*<\s*([^>]+)\s*>\s*\('
+    )
+    for match in make_shared_pattern.finditer(source):
+        variable_types[match.group(1)] = match.group(2).strip()
+
     return variable_types
 
 
@@ -486,6 +496,21 @@ def transport_message_type_from_receiver(receiver: str, variable_types: dict[str
     if cpp_type:
         return transport_message_type_from_cpp_type(cpp_type, aliases)
     return transport_message_type_from_cpp_type(root, aliases)
+
+
+def transport_subscribe_topic_argument(
+    args: list[str],
+    receiver: str,
+    variable_types: dict[str, str],
+    aliases: dict,
+) -> Optional[str]:
+    """Return the topic argument from a transport subscribe call."""
+    cleaned = re.sub(r'\bthis->', '', receiver).strip()
+    root = re.split(r'\s*(?:->|\.)\s*', cleaned, maxsplit=1)[0]
+    cpp_type = variable_types.get(root, root)
+    resolved_type = aliases.get(cpp_type, cpp_type)
+    topic_index = TRANSPORT_SUBSCRIBE_TOPIC_ARGUMENTS.get(resolved_type, 0)
+    return args[topic_index] if len(args) > topic_index else None
 
 
 def is_transport_like(cpp_name: str) -> bool:
@@ -536,7 +561,8 @@ def extract_subscribers(source: str, aliases: dict, string_symbols: dict[str, st
         args = split_cpp_arguments(call_body)
         if not args:
             continue
-        topic = resolve_cpp_string_expression(args[0], string_symbols)
+        topic_arg = transport_subscribe_topic_argument(args, receiver, variable_types, aliases)
+        topic = resolve_cpp_string_expression(topic_arg, string_symbols) if topic_arg else None
         msg_type = transport_message_type_from_receiver(receiver, variable_types, aliases)
         if topic and msg_type:
             subscribers.append(TopicInterface(name=topic, msg_type=msg_type))
@@ -1260,12 +1286,43 @@ def build_topic_descriptions_from_launch_files(launch_files: list) -> dict[str, 
     return descriptions
 
 
+def add_dynamic_topic_parameter_descriptions(
+    descriptions: dict[str, str],
+    interfaces: list[TopicInterface],
+    parameters: list[Parameter],
+) -> dict[str, str]:
+    """Describe indexed topic expressions using their corresponding parameter."""
+    result = dict(descriptions)
+    parameter_descriptions = {parameter.name: parameter.description for parameter in parameters}
+    for interface in interfaces:
+        match = re.fullmatch(r'([A-Za-z_]\w*)\s*\[[^\]]+\]', interface.name)
+        if not match:
+            continue
+        symbol = match.group(1)
+        for candidate in (symbol, symbol.rstrip('_')):
+            description = parameter_descriptions.get(candidate)
+            if description:
+                result.setdefault(interface.name, description)
+                break
+    return result
+
+
 def build_node_context(
     node: NodeInterfaces,
     manual_descriptions: dict[tuple, str],
     manual_node_texts: dict[str, str],
     topic_descriptions: dict[str, str],
 ) -> NodeTemplateContext:
+    subscriber_descriptions = add_dynamic_topic_parameter_descriptions(
+        topic_descriptions,
+        node.subscribers,
+        node.parameters,
+    )
+    publisher_descriptions = add_dynamic_topic_parameter_descriptions(
+        topic_descriptions,
+        node.publishers,
+        node.parameters,
+    )
     return NodeTemplateContext(
         node_name=node.node_name,
         manual_text=manual_node_texts.get(node.node_name, ''),
@@ -1275,7 +1332,7 @@ def build_node_context(
             manual_descriptions,
             ('Nodes', f'`{node.node_name}`', 'Subscribed Topics'),
             'topic',
-            topic_descriptions,
+            subscriber_descriptions,
         ),
         publishers=build_interface_rows(
             node.publishers,
@@ -1283,7 +1340,7 @@ def build_node_context(
             manual_descriptions,
             ('Nodes', f'`{node.node_name}`', 'Published Topics'),
             'topic',
-            topic_descriptions,
+            publisher_descriptions,
         ),
         service_servers=build_interface_rows(
             node.service_servers,

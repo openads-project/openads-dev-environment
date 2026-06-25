@@ -26,10 +26,10 @@
 ```mermaid
 flowchart LR
     NODE("{{ node.node_name | replace('"', "'") }}")
-{% for subscriber in node.subscribers %}    S{{ loop.index0 }}:::hidden -->|{{ subscriber.name | replace('"', "'") }}| NODE
-{% endfor %}{% for service_server in node.service_servers %}    SS{{ loop.index0 }}:::hidden o--o|{{ service_server.name | replace('"', "'") }}| NODE
-{% endfor %}{% for publisher in node.publishers %}    NODE -->|{{ publisher.name | replace('"', "'") }}| P{{ loop.index0 }}:::hidden
-{% endfor %}{% for action_server in node.action_servers %}    AS{{ loop.index0 }}:::hidden o-.-o|{{ action_server.name | replace('"', "'") }}| NODE
+{% for subscriber in node.subscribers %}    S{{ loop.index0 }}:::hidden -->|"{{ subscriber.name | replace('"', "'") }}"| NODE
+{% endfor %}{% for service_server in node.service_servers %}    SS{{ loop.index0 }}:::hidden o--o|"{{ service_server.name | replace('"', "'") }}"| NODE
+{% endfor %}{% for publisher in node.publishers %}    NODE -->|"{{ publisher.name | replace('"', "'") }}"| P{{ loop.index0 }}:::hidden
+{% endfor %}{% for action_server in node.action_servers %}    AS{{ loop.index0 }}:::hidden o-.-o|"{{ action_server.name | replace('"', "'") }}"| NODE
 {% endfor %}    classDef hidden display: none;
 ```
 {%- endmacro -%}

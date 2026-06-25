@@ -1,4 +1,4 @@
-name: compose-generator
+name: generators
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  compose-generator:
+  generators:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout openads-dev-environment
@@ -16,5 +16,5 @@ jobs:
       - name: Install dependencies via pip
         run: python3 -m pip install -r scripts/requirements.txt
 
-      - name: Run compose generator pytests
-        run: python3 -m pytest tests/test_generate_compose.py
+      - name: Run generator pytests
+        run: python3 -m pytest tests/test_generate_compose.py tests/test_generate_readme.py
