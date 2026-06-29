@@ -14,13 +14,11 @@ from __future__ import annotations
 
 import argparse
 import difflib
-import io
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -92,16 +90,6 @@ def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         cwd=cwd,
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-
-def run_git_binary(args: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -242,51 +230,85 @@ def parse_consistency_output(output: str) -> dict[str, tuple[bool, str]]:
 
 def ensure_git_revision_available(repo_dir: Path, revision: str) -> str | None:
     exists = run_git(["cat-file", "-e", f"{revision}^{{commit}}"], cwd=repo_dir)
-    if exists.returncode == 0:
+    remote_main = run_git(["rev-parse", "refs/remotes/origin/main"], cwd=repo_dir)
+    if exists.returncode == 0 and remote_main.stdout.strip() == revision:
         return None
 
-    fetch = run_git(["fetch", "--depth=1", "origin", "refs/heads/main"], cwd=repo_dir)
+    fetch = run_git(
+        ["fetch", "--depth=1", "origin", "refs/heads/main:refs/remotes/origin/main"],
+        cwd=repo_dir,
+    )
     if fetch.returncode != 0:
         return fetch.stderr.strip() or "git fetch failed"
 
-    exists_after_fetch = run_git(["cat-file", "-e", f"{revision}^{{commit}}"], cwd=repo_dir)
-    if exists_after_fetch.returncode != 0:
-        return exists_after_fetch.stderr.strip() or f"revision is unavailable after fetch: {revision}"
+    exists = run_git(["cat-file", "-e", f"{revision}^{{commit}}"], cwd=repo_dir)
+    if exists.returncode != 0:
+        return exists.stderr.strip() or f"revision is unavailable after fetch: {revision}"
 
     return None
 
 
-def extract_git_archive(repo_dir: Path, revision: str, destination: Path) -> str | None:
-    availability_error = ensure_git_revision_available(repo_dir, revision)
-    if availability_error is not None:
-        return availability_error
-
-    archive = run_git_binary(["archive", "--format=tar", revision], cwd=repo_dir)
-    if archive.returncode != 0:
-        return archive.stderr.decode("utf-8", errors="replace").strip() or "git archive failed"
-
-    destination.mkdir(parents=True, exist_ok=True)
-    destination_root = destination.resolve()
-    with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as tar:
-        for member in tar.getmembers():
-            member_path = (destination / member.name).resolve()
-            if member_path != destination_root and destination_root not in member_path.parents:
-                return f"refusing to extract archive member outside destination: {member.name}"
-        tar.extractall(destination)
-
-    return None
-
-
-def checkout_repo_snapshot(source_repo: Path, destination: Path) -> str | None:
-    source_head = run_git(["rev-parse", "HEAD"], cwd=source_repo)
-    if source_head.returncode != 0:
-        return source_head.stderr.strip() or "failed to resolve repository HEAD"
-
+def clone_repo_at_head(source_repo: Path, destination: Path) -> str | None:
     clone = run_command(["git", "clone", "--no-checkout", str(source_repo), str(destination)], cwd=source_repo)
     if clone.returncode != 0:
         return clone.stderr.strip() or "git clone failed"
 
-    checkout = run_git(["checkout", "--detach", source_head.stdout.strip()], cwd=destination)
+    checkout = run_git(["checkout", "--detach", "HEAD"], cwd=destination)
+    if checkout.returncode != 0:
+        return checkout.stderr.strip() or "git checkout failed"
+
+    return None
+
+
+def overlay_git_worktree(
+    source_repo: Path,
+    destination: Path,
+    excluded_paths: tuple[str, ...] = (),
+) -> str | None:
+    files = run_git(
+        ["ls-files", "-z", "--cached", "--modified", "--deleted", "--others", "--exclude-standard"],
+        cwd=source_repo,
+    )
+    if files.returncode != 0:
+        return files.stderr.strip() or "git ls-files failed"
+
+    for raw_path in files.stdout.split("\0"):
+        if not raw_path or any(raw_path == path or raw_path.startswith(f"{path}/") for path in excluded_paths):
+            continue
+
+        source_path = source_repo / raw_path
+        destination_path = destination / raw_path
+        if not source_path.exists() and not source_path.is_symlink():
+            if destination_path.exists() or destination_path.is_symlink():
+                destination_path.unlink()
+            continue
+
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        if source_path.is_symlink():
+            if destination_path.exists() or destination_path.is_symlink():
+                destination_path.unlink()
+            destination_path.symlink_to(os.readlink(source_path))
+        elif source_path.is_file():
+            shutil.copy2(source_path, destination_path)
+
+    return None
+
+
+def checkout_dev_environment(source_dev_environment: Path, destination: Path, revision: str) -> str | None:
+    availability_error = ensure_git_revision_available(source_dev_environment, revision)
+    if availability_error is not None:
+        return availability_error
+
+    clone = run_command(
+        ["git", "clone", "--no-checkout", str(source_dev_environment), str(destination)],
+        cwd=destination.parent,
+    )
+    if clone.returncode != 0:
+        return clone.stderr.strip() or "git clone failed"
+
+    run_git(["fetch", "origin", "refs/remotes/origin/main:refs/remotes/origin/main"], cwd=destination)
+
+    checkout = run_git(["checkout", "--detach", revision], cwd=destination)
     if checkout.returncode != 0:
         return checkout.stderr.strip() or "git checkout failed"
 
@@ -298,19 +320,30 @@ def prepare_comparison_repo(
     source_dev_environment: Path,
     dev_environment_revision: str,
     destination: Path,
+    *,
+    overlay_local_dev_environment: bool = False,
 ) -> str | None:
-    checkout_error = checkout_repo_snapshot(source_repo, destination)
-    if checkout_error is not None:
-        return checkout_error
+    repo_error = clone_repo_at_head(source_repo, destination)
+    if repo_error is not None:
+        return repo_error
+
+    overlay_error = overlay_git_worktree(source_repo, destination, excluded_paths=(".openads-dev-environment",))
+    if overlay_error is not None:
+        return overlay_error
 
     target_dev_environment = destination / ".openads-dev-environment"
-    if target_dev_environment.exists() or target_dev_environment.is_symlink():
-        if target_dev_environment.is_dir() and not target_dev_environment.is_symlink():
-            shutil.rmtree(target_dev_environment)
-        else:
-            target_dev_environment.unlink()
+    dev_environment_error = checkout_dev_environment(
+        source_dev_environment,
+        target_dev_environment,
+        dev_environment_revision,
+    )
+    if dev_environment_error is not None:
+        return dev_environment_error
 
-    return extract_git_archive(source_dev_environment, dev_environment_revision, target_dev_environment)
+    if overlay_local_dev_environment:
+        return overlay_git_worktree(source_dev_environment, target_dev_environment)
+
+    return None
 
 
 def run_consistency_snapshot(
@@ -358,6 +391,7 @@ def compare_consistency_snapshots(
             source_dev_environment,
             local_revision,
             local_repo,
+            overlay_local_dev_environment=True,
         )
         if local_error is not None:
             return [], [f"Failed to prepare local dev-environment snapshot: {local_error}"]
