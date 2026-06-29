@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -38,6 +40,7 @@ class CheckResult:
 @dataclass(frozen=True)
 class CheckContext:
     repo_root: Path
+    selected_check_ids: tuple[str, ...] = ()
 
 
 CheckFn = Callable[[CheckContext], CheckResult]
@@ -89,6 +92,16 @@ def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         cwd=cwd,
         check=False,
         text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def run_git_binary(args: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -207,6 +220,198 @@ def path_with_line(path: str, line: str | None) -> str:
     if not line or not line.isdigit() or int(line) <= 0:
         return path
     return f"{path}:{line}"
+
+
+@dataclass(frozen=True)
+class ConsistencyRunResult:
+    returncode: int
+    results: dict[str, tuple[bool, str]]
+    output: str
+
+
+def parse_consistency_output(output: str) -> dict[str, tuple[bool, str]]:
+    results: dict[str, tuple[bool, str]] = {}
+    for line in output.splitlines():
+        match = re.match(r"^(PASS|FAIL)\s+(\S+)\s+(.*)$", line)
+        if match is None:
+            continue
+        status, check_id, message = match.groups()
+        results[check_id] = (status == "PASS", message.strip())
+    return results
+
+
+def ensure_git_revision_available(repo_dir: Path, revision: str) -> str | None:
+    exists = run_git(["cat-file", "-e", f"{revision}^{{commit}}"], cwd=repo_dir)
+    if exists.returncode == 0:
+        return None
+
+    fetch = run_git(["fetch", "--depth=1", "origin", "refs/heads/main"], cwd=repo_dir)
+    if fetch.returncode != 0:
+        return fetch.stderr.strip() or "git fetch failed"
+
+    exists_after_fetch = run_git(["cat-file", "-e", f"{revision}^{{commit}}"], cwd=repo_dir)
+    if exists_after_fetch.returncode != 0:
+        return exists_after_fetch.stderr.strip() or f"revision is unavailable after fetch: {revision}"
+
+    return None
+
+
+def extract_git_archive(repo_dir: Path, revision: str, destination: Path) -> str | None:
+    availability_error = ensure_git_revision_available(repo_dir, revision)
+    if availability_error is not None:
+        return availability_error
+
+    archive = run_git_binary(["archive", "--format=tar", revision], cwd=repo_dir)
+    if archive.returncode != 0:
+        return archive.stderr.decode("utf-8", errors="replace").strip() or "git archive failed"
+
+    destination.mkdir(parents=True, exist_ok=True)
+    destination_root = destination.resolve()
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as tar:
+        for member in tar.getmembers():
+            member_path = (destination / member.name).resolve()
+            if member_path != destination_root and destination_root not in member_path.parents:
+                return f"refusing to extract archive member outside destination: {member.name}"
+        tar.extractall(destination)
+
+    return None
+
+
+def checkout_repo_snapshot(source_repo: Path, destination: Path) -> str | None:
+    source_head = run_git(["rev-parse", "HEAD"], cwd=source_repo)
+    if source_head.returncode != 0:
+        return source_head.stderr.strip() or "failed to resolve repository HEAD"
+
+    clone = run_command(["git", "clone", "--no-checkout", str(source_repo), str(destination)], cwd=source_repo)
+    if clone.returncode != 0:
+        return clone.stderr.strip() or "git clone failed"
+
+    checkout = run_git(["checkout", "--detach", source_head.stdout.strip()], cwd=destination)
+    if checkout.returncode != 0:
+        return checkout.stderr.strip() or "git checkout failed"
+
+    return None
+
+
+def prepare_comparison_repo(
+    source_repo: Path,
+    source_dev_environment: Path,
+    dev_environment_revision: str,
+    destination: Path,
+) -> str | None:
+    checkout_error = checkout_repo_snapshot(source_repo, destination)
+    if checkout_error is not None:
+        return checkout_error
+
+    target_dev_environment = destination / ".openads-dev-environment"
+    if target_dev_environment.exists() or target_dev_environment.is_symlink():
+        if target_dev_environment.is_dir() and not target_dev_environment.is_symlink():
+            shutil.rmtree(target_dev_environment)
+        else:
+            target_dev_environment.unlink()
+
+    return extract_git_archive(source_dev_environment, dev_environment_revision, target_dev_environment)
+
+
+def run_consistency_snapshot(
+    repo_root: Path,
+    check_ids: list[str],
+) -> ConsistencyRunResult:
+    checker = repo_root / ".openads-dev-environment" / "scripts" / "check_repository_consistency.py"
+    command = [
+        sys.executable,
+        str(checker),
+        "--repo-root",
+        str(repo_root),
+        "--only",
+        ",".join(check_ids),
+    ]
+    result = subprocess.run(
+        command,
+        cwd=repo_root,
+        check=False,
+        stderr=subprocess.STDOUT,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    return ConsistencyRunResult(
+        returncode=result.returncode,
+        results=parse_consistency_output(result.stdout),
+        output=result.stdout,
+    )
+
+
+def compare_consistency_snapshots(
+    repo_root: Path,
+    source_dev_environment: Path,
+    local_revision: str,
+    remote_revision: str,
+    check_ids: list[str],
+) -> tuple[list[str], list[str]]:
+    with tempfile.TemporaryDirectory(prefix="consistency-dev-env-compare-") as tmp_dir_str:
+        tmp_dir = Path(tmp_dir_str)
+        local_repo = tmp_dir / "local"
+        remote_repo = tmp_dir / "remote"
+
+        local_error = prepare_comparison_repo(
+            repo_root,
+            source_dev_environment,
+            local_revision,
+            local_repo,
+        )
+        if local_error is not None:
+            return [], [f"Failed to prepare local dev-environment snapshot: {local_error}"]
+
+        remote_error = prepare_comparison_repo(
+            repo_root,
+            source_dev_environment,
+            remote_revision,
+            remote_repo,
+        )
+        if remote_error is not None:
+            return [], [f"Failed to prepare origin/main dev-environment snapshot: {remote_error}"]
+
+        local_run = run_consistency_snapshot(local_repo, check_ids)
+        remote_run = run_consistency_snapshot(remote_repo, check_ids)
+
+    comparison_errors: list[str] = []
+    if local_run.returncode == 2:
+        comparison_errors.append("Local dev-environment consistency checker rejected the comparison arguments.")
+    if remote_run.returncode == 2:
+        comparison_errors.append("origin/main dev-environment consistency checker rejected the comparison arguments.")
+    if comparison_errors:
+        if local_run.output.strip():
+            comparison_errors.append("local output:\n" + local_run.output.strip())
+        if remote_run.output.strip():
+            comparison_errors.append("origin/main output:\n" + remote_run.output.strip())
+        return [], comparison_errors
+
+    differences: list[str] = []
+    for check_id in check_ids:
+        local_result = local_run.results.get(check_id)
+        remote_result = remote_run.results.get(check_id)
+        if local_result is None or remote_result is None:
+            missing = []
+            if local_result is None:
+                missing.append("local")
+            if remote_result is None:
+                missing.append("origin/main")
+            differences.append(f"{check_id}: missing result in {', '.join(missing)} dev-environment run")
+            continue
+
+        local_passed, local_message = local_result
+        remote_passed, remote_message = remote_result
+        if local_passed == remote_passed:
+            continue
+
+        local_status = "PASS" if local_passed else "FAIL"
+        remote_status = "PASS" if remote_passed else "FAIL"
+        differences.append(
+            f"{check_id}: local {local_status} ({local_message}); "
+            f"origin/main {remote_status} ({remote_message})"
+        )
+
+    return differences, []
 
 
 def has_doxygen_description(member: ET.Element) -> bool:
@@ -1596,12 +1801,63 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
     local_hash = local_head.stdout.strip()
 
     if local_hash != remote_hash:
+        comparison_check_ids = [
+            check_id for check_id in ctx.selected_check_ids if check_id != "dev_environment_at_remote_main"
+        ]
+        base_details = [f"local HEAD : {local_hash}", f"origin/main: {remote_hash}"]
+
+        if not comparison_check_ids:
+            return CheckResult(
+                check_id="dev_environment_at_remote_main",
+                name=".openads-dev-environment matches origin/main",
+                passed=True,
+                message=(
+                    "Submodule HEAD differs from remote origin/main, but no other selected checks "
+                    "are available for comparison"
+                ),
+                details=base_details,
+            )
+
+        differences, comparison_errors = compare_consistency_snapshots(
+            ctx.repo_root,
+            submodule_dir,
+            local_hash,
+            remote_hash,
+            comparison_check_ids,
+        )
+        if comparison_errors:
+            return CheckResult(
+                check_id="dev_environment_at_remote_main",
+                name=".openads-dev-environment matches origin/main",
+                passed=False,
+                message="Submodule HEAD differs from remote origin/main and comparison could not be completed",
+                details=base_details + comparison_errors,
+            )
+
+        if differences:
+            return CheckResult(
+                check_id="dev_environment_at_remote_main",
+                name=".openads-dev-environment matches origin/main",
+                passed=False,
+                message=(
+                    "Submodule HEAD differs from remote origin/main and selected check outcomes differ"
+                ),
+                details=base_details
+                + [
+                    f"Compared checks: {', '.join(comparison_check_ids)}",
+                    "Outcome differences:",
+                    *differences,
+                ],
+            )
+
         return CheckResult(
             check_id="dev_environment_at_remote_main",
             name=".openads-dev-environment matches origin/main",
-            passed=False,
-            message="Submodule HEAD does not match remote origin/main",
-            details=[f"local HEAD : {local_hash}", f"origin/main: {remote_hash}"],
+            passed=True,
+            message=(
+                "Submodule HEAD differs from remote origin/main, but selected check outcomes match"
+            ),
+            details=base_details + [f"Compared checks: {', '.join(comparison_check_ids)}"],
         )
 
     return CheckResult(
@@ -2021,7 +2277,7 @@ def main() -> int:
         print(f"Known check IDs: {', '.join(CHECKS.keys())}", file=sys.stderr)
         return 2
 
-    ctx = CheckContext(repo_root=repo_root)
+    ctx = CheckContext(repo_root=repo_root, selected_check_ids=tuple(selected_check_ids))
     results = run_checks(ctx, selected_check_ids)
     print_report(ctx, results)
 
