@@ -34,9 +34,14 @@ jobs:
           python3 scripts/check_downstream_consistency.py \
             --markdown-report "${comment_file}" \
             https://github.com/openads-project/ackermann_trajectory_control.git \
+            https://github.com/openads-project/carla_converter.git \
             https://github.com/openads-project/lanelet2_map_server.git \
             https://github.com/openads-project/lanelet2_route_planning.git \
+            https://github.com/openads-project/monitoring.git \
             https://github.com/openads-project/openads_demo_module.git \
+            https://github.com/openads-project/point_cloud_fusion.git \
+            https://github.com/openads-project/ros_middleware_bridge.git \
+            https://github.com/openads-project/simulation_adapter.git \
             https://github.com/openads-project/trajectory_optimization.git
 
           if [ ! -s "${comment_file}" ]; then
