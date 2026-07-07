@@ -73,6 +73,7 @@ class RepoRemote:
 class LaunchCommandArgument:
     name: str
     env_name: str
+    only_if_set: bool = False
 
 
 def constant_string(node: ast.AST | None) -> str | None:
@@ -551,7 +552,12 @@ def build_compose(repo_root: Path, gitlab_registry: str | None = None) -> str:
         "launch_package": package_metadata.name,
         "launch_file_name": launch_data.launch_file_name,
         "launch_arguments": [
-            LaunchCommandArgument(name=argument_name, env_name=env_name(argument_name))
+            LaunchCommandArgument(
+                name=argument_name,
+                env_name=env_name(argument_name),
+                only_if_set=arguments[argument_name].default_value == ""
+                and argument_name not in STANDARD_LAUNCH_ARGUMENT_NAMES,
+            )
             for argument_name in command_argument_names(launch_data)
         ],
         "package_name": package_metadata.name,
