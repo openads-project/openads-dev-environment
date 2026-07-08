@@ -29,7 +29,7 @@ services:
           log_level:=$${LOG_LEVEL} \
           use_sim_time:=$${USE_SIM_TIME} \
           params:=$${PARAMS} \
-          params_other:=$${PARAMS_OTHER} \
+          $${PARAMS_OTHER:+params_other:=$${PARAMS_OTHER}} \
           input_topic:=$${INPUT_TOPIC} \
           output_topic:=$${OUTPUT_TOPIC} \
           service_topic:=$${SERVICE_TOPIC} \
