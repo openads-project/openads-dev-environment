@@ -206,6 +206,19 @@ def cpp_ros_type(cpp_type: str, type_aliases: dict) -> str:
     return t.replace('::', '/').strip()
 
 
+PYTHON_PARAM_TYPE_MAP = {
+    'BOOL': 'bool',
+    'INTEGER': 'int',
+    'DOUBLE': 'float',
+    'STRING': 'string',
+    'BYTE_ARRAY': 'byte[]',
+    'BOOL_ARRAY': 'bool[]',
+    'INTEGER_ARRAY': 'int[]',
+    'DOUBLE_ARRAY': 'float[]',
+    'STRING_ARRAY': 'string[]',
+}
+
+
 def cpp_param_type(cpp_type: str) -> str:
     """Map C++ type to ROS parameter type name."""
     t = cpp_type.strip()
@@ -290,6 +303,29 @@ def find_node_sources(package_dir: Path) -> list:
     return [
         cpp for cpp in sorted(package_dir.rglob('*.cpp'))
         if node_pattern.search(cpp.read_text(errors='replace'))
+    ]
+
+
+def python_defines_node(source: str) -> bool:
+    """Return whether the Python source defines a class deriving from rclpy's Node."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                base_name = base.attr if isinstance(base, ast.Attribute) else getattr(base, 'id', '')
+                if base_name == 'Node':
+                    return True
+    return False
+
+
+def find_python_node_sources(package_dir: Path) -> list:
+    """Return .py files that define a ROS node (a class deriving from Node)."""
+    return [
+        py for py in sorted(package_dir.rglob('*.py'))
+        if python_defines_node(py.read_text(errors='replace'))
     ]
 
 
@@ -887,6 +923,170 @@ def extract_raw_parameters(source: str) -> list:
         params.append((name, member_name, description))
 
     return params
+
+
+def ast_constant_string(node: "ast.AST | None") -> Optional[str]:
+    """Return the value of a string-constant AST node, else None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def python_call_argument(call: ast.Call, index: Optional[int], name: str) -> "ast.AST | None":
+    """Return a call argument by keyword name, falling back to positional index."""
+    for keyword in call.keywords:
+        if keyword.arg == name:
+            return keyword.value
+    if index is not None and index < len(call.args) and not isinstance(call.args[index], ast.Starred):
+        return call.args[index]
+    return None
+
+
+def python_call_name(call: ast.Call) -> str:
+    """Return the called function/method name for a Python call node."""
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return ''
+
+
+def build_python_import_type_map(tree: ast.AST) -> dict[str, str]:
+    """Map imported interface class names to ROS 'pkg/kind/Type' strings."""
+    result: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or not node.module:
+            continue
+        parts = node.module.split('.')
+        if len(parts) < 2 or parts[-1] not in ('msg', 'srv', 'action'):
+            continue
+        prefix = '/'.join(parts)
+        for alias in node.names:
+            if alias.name == '*':
+                continue
+            local = alias.asname or alias.name
+            result[local] = f'{prefix}/{alias.name}'
+    return result
+
+
+def resolve_python_interface_type(node: "ast.AST | None", type_map: dict[str, str]) -> Optional[str]:
+    """Resolve a message/service/action type argument to ROS notation."""
+    if isinstance(node, ast.Name):
+        name = node.id
+    elif isinstance(node, ast.Attribute):
+        name = node.attr
+    else:
+        return None
+    return type_map.get(name, name)
+
+
+def render_python_default(node: "ast.AST | None", source: str) -> str:
+    """Render a Python default-value expression for Markdown display."""
+    if node is None:
+        return ''
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, bool):
+            return 'true' if value else 'false'
+        if value is None:
+            return ''
+        if isinstance(value, str):
+            return value
+        return repr(value)
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return '[' + ', '.join(render_python_default(element, source) for element in node.elts) + ']'
+    return (ast.get_source_segment(source, node) or ast.unparse(node)).strip()
+
+
+def extract_python_node_name(tree: ast.AST) -> Optional[str]:
+    """Return the node name from a super().__init__("name") call."""
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == '__init__'
+            and isinstance(node.func.value, ast.Call)
+            and isinstance(node.func.value.func, ast.Name)
+            and node.func.value.func.id == 'super'
+            and node.args
+        ):
+            name = ast_constant_string(node.args[0])
+            if name:
+                return name
+    return None
+
+
+def extract_python_parameters(tree: ast.AST, source: str) -> list:
+    """Return Parameters from declare_and_load_parameter calls in Python source."""
+    parameters = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if python_call_name(node) not in ('declare_and_load_parameter', 'declareAndLoadParameter'):
+            continue
+
+        name = ast_constant_string(python_call_argument(node, 0, 'name'))
+        if not name:
+            continue
+
+        type_node = python_call_argument(node, 1, 'param_type')
+        type_key = type_node.attr if isinstance(type_node, ast.Attribute) else None
+        ros_type = PYTHON_PARAM_TYPE_MAP.get(type_key, '') if type_key else ''
+
+        description = ast_constant_string(python_call_argument(node, 2, 'description')) or ''
+        default = render_python_default(python_call_argument(node, 3, 'default'), source)
+
+        parameters.append(Parameter(name=name, ros_type=ros_type, default=default, description=description))
+    return parameters
+
+
+def extract_python_node_interfaces(source: str, fallback_name: str) -> Optional[NodeInterfaces]:
+    """Parse a Python node source into NodeInterfaces (name, endpoints, parameters)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    type_map = build_python_import_type_map(tree)
+    subscribers: list = []
+    publishers: list = []
+    service_servers: list = []
+    action_servers: list = []
+    action_clients: list = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = python_call_name(node)
+
+        if call_name in ('create_subscription', 'create_publisher'):
+            topic = ast_constant_string(python_call_argument(node, 1, 'topic'))
+            msg_type = resolve_python_interface_type(python_call_argument(node, 0, 'msg_type'), type_map)
+            if topic and msg_type:
+                interface = TopicInterface(name=topic, msg_type=msg_type)
+                (subscribers if call_name == 'create_subscription' else publishers).append(interface)
+        elif call_name == 'create_service':
+            srv_name = ast_constant_string(python_call_argument(node, 1, 'srv_name'))
+            srv_type = resolve_python_interface_type(python_call_argument(node, 0, 'srv_type'), type_map)
+            if srv_name and srv_type:
+                service_servers.append(ServiceInterface(name=srv_name, srv_type=srv_type))
+        elif call_name in ('ActionServer', 'ActionClient'):
+            action_name = ast_constant_string(python_call_argument(node, 2, 'action_name'))
+            action_type = resolve_python_interface_type(python_call_argument(node, 1, 'action_type'), type_map)
+            if action_name and action_type:
+                interface = ActionInterface(name=action_name, action_type=action_type)
+                (action_servers if call_name == 'ActionServer' else action_clients).append(interface)
+
+    return NodeInterfaces(
+        node_name=extract_python_node_name(tree) or fallback_name,
+        subscribers=unique_topic_interfaces(subscribers),
+        publishers=unique_topic_interfaces(publishers),
+        service_servers=service_servers,
+        action_servers=action_servers,
+        action_clients=action_clients,
+        parameters=extract_python_parameters(tree, source),
+    )
 
 
 def extract_python_launch_arguments(source: str) -> list:
@@ -1736,6 +1936,7 @@ def main():
         srvs = find_interface_files(pkg_dir, 'srv', 'srv')
         actions = find_interface_files(pkg_dir, 'action', 'action')
         node_sources = find_node_sources(pkg_dir)
+        python_node_sources = find_python_node_sources(pkg_dir)
         launch_files = find_launch_files(pkg_dir)
 
         sections = []
@@ -1775,11 +1976,19 @@ def main():
                 ),
             ))
 
-        if node_sources or launch_files:
+        if node_sources or python_node_sources or launch_files:
             headers = find_headers(pkg_dir)
             member_var_map = build_member_var_map(headers)
             type_aliases = build_type_alias_map(headers)
             topic_descriptions = build_topic_descriptions_from_launch_files(launch_files)
+
+            for source_file in python_node_sources:
+                node = extract_python_node_interfaces(
+                    source_file.read_text(errors='replace'),
+                    source_file.stem,
+                )
+                if node is not None:
+                    nodes.append(node)
 
             for source_file in node_sources:
                 source = source_file.read_text(errors='replace')
