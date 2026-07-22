@@ -6,7 +6,7 @@
   <a href="https://github.com/openads-project/openads-dev-environment/blob/main/LICENSE"><img src="https://img.shields.io/github/license/openads-project/openads-dev-environment"/></a>
 </p>
 
-This repository defines a common development environment for and enforces consistency of components of [***OpenADS***](https://github.com/openads-project), the *Open Automated Driving Stack*.
+This repository defines a common development environment for and enforces consistency of components of [***OpenADS***](https://openads-project.github.io/), the *Open Automated Driving Systems* project.
 
 **Features**
 - [.vscode](#vs-code-configuration) settings, recommended extensions, tasks, and debugging configurations
