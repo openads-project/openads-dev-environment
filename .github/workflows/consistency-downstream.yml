@@ -36,11 +36,15 @@ jobs:
             https://github.com/openads-project/ackermann_trajectory_control.git \
             https://github.com/openads-project/carla_converter.git \
             https://github.com/openads-project/lanelet2_map_server.git \
+            https://github.com/openads-project/lanelet2_object_list_prediction.git \
             https://github.com/openads-project/lanelet2_route_planning.git \
             https://github.com/openads-project/monitoring.git \
             https://github.com/openads-project/openads_demo_module.git \
             https://github.com/openads-project/point_cloud_fusion.git \
+            https://github.com/openads-project/point_cloud_object_detection.git \
+            https://github.com/openads-project/ros2_graph_export.git \
             https://github.com/openads-project/ros_middleware_bridge.git \
+            https://github.com/openads-project/simple_planner.git \
             https://github.com/openads-project/simulation_adapter.git \
             https://github.com/openads-project/trajectory_optimization.git
 
