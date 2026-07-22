@@ -143,11 +143,3 @@ def test_render_ordinary_topic_as_unquoted_mermaid_label() -> None:
     generator = load_generator()
 
     assert generator.render_mermaid_edge_label("~/point_cloud") == "~/point_cloud"
-
-
-def test_openads_note_uses_project_website() -> None:
-    """Use the OpenADS project website in generated top-level READMEs."""
-    generator = load_generator()
-
-    assert "https://openads-project.github.io/" in generator.PRE_QUICKSTART_PLACEHOLDER
-    assert "https://github.com/openads-project)" not in generator.PRE_QUICKSTART_PLACEHOLDER

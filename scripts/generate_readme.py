@@ -1646,7 +1646,7 @@ def render_package_readme(
 
 PRE_QUICKSTART_PLACEHOLDER = (
     '> [!IMPORTANT]\n'
-    '> This repository is part of [***OpenADS***](https://openads-project.github.io/), '
+    '> This repository is part of [***OpenADS***](https://github.com/openads-project), '
     'the *Open Automated Driving Systems* project. *OpenADS* and its modules have '
     'been initiated and are currently being maintained by the '
     '[**Institute for Automotive Engineering (ika) at RWTH Aachen University**]'
