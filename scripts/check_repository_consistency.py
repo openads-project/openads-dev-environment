@@ -1648,7 +1648,6 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
     expected_links = {
         ".devcontainer": ".openads-dev-environment/.devcontainer/",
         ".vscode": ".openads-dev-environment/.vscode/",
-        ".pre-commit-config.yaml": ".openads-dev-environment/.pre-commit-config.yaml",
     }
 
     errors: list[str] = []
