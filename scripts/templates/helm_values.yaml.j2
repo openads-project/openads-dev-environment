@@ -1,0 +1,49 @@
+its-module:
+  name: {{ chart_name }}
+  imageName: {{ image_name }}
+  imageTag: {{ image_tag }}
+  command:
+  - /bin/bash
+  - -ic
+  args:
+  - |
+    ros2 launch {{ launch_package }} {{ launch_file_name }} \
+{% for argument in launch_arguments %}
+{% if argument.only_if_set %}
+      ${{ "{" }}{{ argument.env_name }}:+{{ argument.name }}:=${{ "{" }}{{ argument.env_name }}{{ "}" }}{{ "}" }}{{ " \\" if not loop.last else "" }}
+{% else %}
+      {{ argument.name }}:=${{ "{" }}{{ argument.env_name }}{{ "}" }}{{ " \\" if not loop.last else "" }}
+{% endif %}
+{% endfor %}
+  env:
+    # --- name ------
+    NAMESPACE: {{ namespace }}
+    NAME: {{ node_name }}
+{% if input_variables %}
+    # --- inputs ----
+{% for variable in input_variables %}
+    {{ variable.name }}: {{ variable.value }}
+{% endfor %}
+{% endif %}
+{% if output_variables %}
+    # --- outputs ---
+{% for variable in output_variables %}
+    {{ variable.name }}: {{ variable.value }}
+{% endfor %}
+{% endif %}
+    # --- other -----
+{% for variable in other_topic_variables %}
+    {{ variable.name }}: {{ variable.value }}
+{% endfor %}
+    LOG_LEVEL: ${{ "{" }}LOG_LEVEL:-{{ log_level }}{{ "}" }}
+    USE_SIM_TIME: ${{ "{" }}USE_SIM_TIME:-{{ use_sim_time }}{{ "}" }}
+{% if params_default_path %}
+    PARAMS: ${{ "{" }}PARAMS:-{{ params_default_path }}{{ "}" }}
+{% endif %}
+{% for variable in extra_launch_variables %}
+    {{ variable.name }}: ${{ "{" }}{{ variable.name }}:-{{ variable.value }}{{ "}" }}
+{% endfor %}
+{% if params_default_path %}
+  rosParamFileMountPath: {{ params_default_path }}
+  rosParamFileData: null
+{% endif %}

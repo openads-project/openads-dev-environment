@@ -1,0 +1,9 @@
+apiVersion: v2
+name: {{ chart_name }}
+version: {{ version }}
+appVersion: {{ version }}
+description: {{ description }}
+dependencies:
+  - repository: oci://ghcr.io/openads-project/openadservice-helm
+    name: openadservice
+    version: 1.0.0
