@@ -1,0 +1,27 @@
+name: helm
+
+on:
+  workflow_call:
+    inputs:
+      chart-folder:
+        description: Path to the Helm chart folder to publish
+        required: false
+        type: string
+        default: helm
+
+jobs:
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Push Helm chart
+        uses: bsord/helm-push@5ec3320fb5720a0a5aa210d871999f2b836f2d97
+        with:
+          useOCIRegistry: true
+          registry-url:  oci://ghcr.io/${{ github.repository }}
+          username: ${{ github.actor }}
+          access-token: ${{ secrets.GITHUB_TOKEN }}
+          chart-folder: ${{ inputs.chart-folder }}
+          force: true # TODO
+          update-dependencies: true
