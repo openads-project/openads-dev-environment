@@ -17,4 +17,4 @@ jobs:
         run: python3 -m pip install -r scripts/requirements.txt
 
       - name: Run generator pytests
-        run: python3 -m pytest tests/test_generate_compose.py tests/test_generate_readme.py
+        run: python3 -m pytest tests/test_generate_compose.py tests/test_generate_helm.py tests/test_generate_readme.py

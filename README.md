@@ -14,6 +14,7 @@ This repository defines a common development environment for and enforces consis
 - [pre-commit hooks](#pre-commit-hooks) configuration for running linting and formatting on each commit
 - [README generator](#readme-generator) for generating common-style repository READMEs
 - [Docker Compose generator](#docker-compose-generator) for generating OpenADS Compose files from launch metadata
+- [Helm Chart generator](#helm-chart-generator) for generating OpenADS Helm charts from launch metadata
 - [consistency checker](#consistency-checker) for enforcing conventions across repositories
 - [CI workflow templates](#ci-workflows) for building and testing container images, building documentation, and checking repository consistency
 
@@ -167,6 +168,14 @@ The generator expects a ROS package subdirectory with a default launch file in `
 
 For GitLab remotes, the generator uses the registry from an existing Compose file when available. Otherwise, override the derived registry with `--gitlab-registry <host[:port]>` or `OPENADS_GITLAB_REGISTRY`; if neither is set, it falls back to `<gitlab-host>:5050`.
 
+### Helm Chart Generator
+
+Use [`generate_helm.py`](scripts/generate_helm.py) to generate `helm/Chart.yaml` and `helm/values.yaml`, similar to the [Docker Compose Generator](#docker-compose-generator).
+
+```bash
+.openads-dev-environment/scripts/generate_helm.py --check
+```
+
 ### Consistency Checker
 
 Use [`check_repository_consistency.py`](scripts/check_repository_consistency.py) to run a set of checks that enforce consistency and conventions across repositories. This is set up to be run in CI, but can also be run locally to check for issues before pushing.
@@ -189,6 +198,7 @@ The [`check_downstream_consistency.py`](scripts/check_downstream_consistency.py)
 | `dev_environment_at_remote_main` | Passes when `.openads-dev-environment` is present as a git repository and its current `HEAD` exactly matches `origin/main`. Update the submodule if it points to any other commit. |
 | `docker_ros_ci_has_no_todo` | Passes when root docker-ros CI files, specifically `.github/workflows/docker-ros.yml` and `.gitlab-ci.yml` when present, contain no `TODO` placeholder text. This ensures the template `command` placeholder was replaced with a repository-specific command. |
 | `generated_readmes_have_no_todo` | Passes when the repository top-level `README.md` and every generated package `README.md` contain no `TODO` placeholders. Replace all remaining placeholder text before committing. |
+| `helm_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_helm.py --check` reports that `helm/Chart.yaml` and `helm/values.yaml` match the current repository and default launch metadata. Re-run the generator and commit the result until the check is clean. |
 | `no_top_level_package_xml` | Passes when the repository root does not contain a `package.xml`. ROS packages must live in subdirectories instead of treating the whole repository as one package. |
 | `readme_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_readme.py` produces no README content changes and no additional git status changes. Re-run the generator and commit the result until a second run is clean. |
 | `required_root_ci_workflows` | Passes when `.github/workflows/` contains `docker-ros.yml`, `docs.yml`, and `consistency.yml`. |
