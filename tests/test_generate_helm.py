@@ -84,7 +84,7 @@ dependencies:
     version: 1.0.0
 """
     assert (repo_root / VALUES_PATH).read_text(encoding="utf-8") == """\
-its-module:
+openadservice:
   name: sample-pkg
   image: ghcr.io/openads-project/sample_pkg:v1.0.0
   command:
@@ -110,9 +110,9 @@ its-module:
     OUTPUT_TOPIC: ~/output
     # --- other -----
     SERVICE_TOPIC: ~/service
-    LOG_LEVEL: ${LOG_LEVEL:-info}
-    USE_SIM_TIME: ${USE_SIM_TIME:-false}
-    PARAMS: ${PARAMS:-/docker-ros/ws/install/sample_pkg/share/sample_pkg/config/params.yml}
+    LOG_LEVEL: info
+    USE_SIM_TIME: false
+    PARAMS: /docker-ros/ws/install/sample_pkg/share/sample_pkg/config/params.yml
   rosParamFileMountPath: /docker-ros/ws/install/sample_pkg/share/sample_pkg/config/params.yml
   rosParamFileData: null
 """

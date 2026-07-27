@@ -33,8 +33,8 @@ openadservice:
 {% for variable in other_topic_variables %}
     {{ variable.name }}: {{ variable.value }}
 {% endfor %}
-    LOG_LEVEL: info
-    USE_SIM_TIME: false
+    LOG_LEVEL: {{ log_level }}
+    USE_SIM_TIME: {{ use_sim_time }}
 {% if params_default_path %}
     PARAMS: {{ params_default_path }}
 {% endif %}
