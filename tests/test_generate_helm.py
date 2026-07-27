@@ -79,19 +79,17 @@ version: 1.0.0
 appVersion: 1.0.0
 description: Helm chart for sample_pkg
 dependencies:
-  - repository: oci://ghcr.io/openads-project/openadservice-helm
+  - repository: oci://ghcr.io/openads-project/openads-helm
     name: openadservice
     version: 1.0.0
 """
     assert (repo_root / VALUES_PATH).read_text(encoding="utf-8") == """\
 its-module:
   name: sample-pkg
-  imageName: ghcr.io/openads-project/sample_pkg
-  imageTag: v1.0.0
+  image: ghcr.io/openads-project/sample_pkg:v1.0.0
   command:
   - /bin/bash
   - -ic
-  args:
   - |
     ros2 launch sample_pkg sample_pkg_launch.py \\
       namespace:=${NAMESPACE} \\
@@ -102,7 +100,7 @@ its-module:
       input_topic:=${INPUT_TOPIC} \\
       output_topic:=${OUTPUT_TOPIC} \\
       service_topic:=${SERVICE_TOPIC}
-  env:
+  environment:
     # --- name ------
     NAMESPACE: /
     NAME: sample_pkg

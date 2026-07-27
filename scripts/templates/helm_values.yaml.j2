@@ -1,11 +1,9 @@
 openadservice:
   name: {{ chart_name }}
-  imageName: {{ image_name }}
-  imageTag: {{ image_tag }}
+  image: {{ image }}
   command:
   - /bin/bash
   - -ic
-  args:
   - |
     ros2 launch {{ launch_package }} {{ launch_file_name }} \
 {% for argument in launch_arguments %}
@@ -15,7 +13,7 @@ openadservice:
       {{ argument.name }}:=${{ "{" }}{{ argument.env_name }}{{ "}" }}{{ " \\" if not loop.last else "" }}
 {% endif %}
 {% endfor %}
-  env:
+  environment:
     # --- name ------
     NAMESPACE: {{ namespace }}
     NAME: {{ node_name }}
