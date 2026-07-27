@@ -33,13 +33,13 @@ openadservice:
 {% for variable in other_topic_variables %}
     {{ variable.name }}: {{ variable.value }}
 {% endfor %}
-    LOG_LEVEL: ${{ "{" }}LOG_LEVEL:-{{ log_level }}{{ "}" }}
-    USE_SIM_TIME: ${{ "{" }}USE_SIM_TIME:-{{ use_sim_time }}{{ "}" }}
+    LOG_LEVEL: info
+    USE_SIM_TIME: false
 {% if params_default_path %}
-    PARAMS: ${{ "{" }}PARAMS:-{{ params_default_path }}{{ "}" }}
+    PARAMS: {{ params_default_path }}
 {% endif %}
 {% for variable in extra_launch_variables %}
-    {{ variable.name }}: ${{ "{" }}{{ variable.name }}:-{{ variable.value }}{{ "}" }}
+    {{ variable.name }}: {{ variable.value }}
 {% endfor %}
 {% if params_default_path %}
   rosParamFileMountPath: {{ params_default_path }}
