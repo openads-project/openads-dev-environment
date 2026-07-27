@@ -1,4 +1,4 @@
-name: helm
+name: helm-oci
 
 on:
   workflow_call:
@@ -10,7 +10,7 @@ on:
         default: helm
 
 jobs:
-  helm:
+  helm-oci:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -23,5 +23,5 @@ jobs:
           username: ${{ github.actor }}
           access-token: ${{ secrets.GITHUB_TOKEN }}
           chart-folder: ${{ inputs.chart-folder }}
-          force: true # TODO
           update-dependencies: true
+          force: true # TODO

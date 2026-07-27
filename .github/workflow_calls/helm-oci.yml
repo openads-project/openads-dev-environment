@@ -1,4 +1,4 @@
-name: helm
+name: helm-oci
 
 on: # TODO
   push:
@@ -9,6 +9,6 @@ on: # TODO
   workflow_dispatch:
 
 jobs:
-  helm:
-    uses: openads-project/openads-dev-environment/.github/workflows/helm.yml@main
+  helm-oci:
+    uses: openads-project/openads-dev-environment/.github/workflows/helm-oci.yml@main
     secrets: inherit
