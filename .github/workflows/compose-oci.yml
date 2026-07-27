@@ -12,12 +12,12 @@ on:
         description: Image name to publish the Docker Compose artifact to
         required: false
         type: string
-        default: ghcr.io/${{ github.repository }}
+        default: ghcr.io/${{ github.repository }}/compose
       image-tag:
         description: Image tag to publish the Docker Compose artifact to
         required: false
         type: string
-        default: compose-${{ github.ref_name }}
+        default: ${{ github.ref_name }}
 
 jobs:
   compose-oci:
