@@ -41,4 +41,4 @@ jobs:
           access-token: ${{ secrets.GITHUB_TOKEN }}
           chart-folder: ${{ inputs.chart-folder }}
           update-dependencies: true
-          force: true # TODO
+          force: true
