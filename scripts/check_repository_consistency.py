@@ -1728,6 +1728,7 @@ def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
         "consistency.yml",
         "docker-ros.yml",
         "docs.yml",
+        "ghcr-cleanup.yml",
         "helm-oci.yml",
     )
     workflows_dir = ctx.repo_root / ".github" / "workflows"
@@ -1761,6 +1762,7 @@ def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
         "compose-oci.yml",
         "consistency.yml",
         "docs.yml",
+        "ghcr-cleanup.yml",
         "helm-oci.yml",
     )
     root_workflows_dir = ctx.repo_root / ".github" / "workflows"

@@ -78,3 +78,49 @@ def test_print_detail_indents_nested_multiline_items() -> None:
         "    - first difference\n"
         "    - second difference\n"
     )
+
+
+def test_required_root_ci_workflows_requires_ghcr_cleanup(tmp_path: Path) -> None:
+    """Report the GHCR cleanup workflow when it is missing downstream."""
+    checker = load_checker()
+    workflows_dir = tmp_path / ".github" / "workflows"
+    workflows_dir.mkdir(parents=True)
+    for workflow_name in (
+        "compose-oci.yml",
+        "consistency.yml",
+        "docker-ros.yml",
+        "docs.yml",
+        "helm-oci.yml",
+    ):
+        (workflows_dir / workflow_name).touch()
+
+    result = checker.check_required_root_ci_workflows(checker.CheckContext(tmp_path))
+
+    assert not result.passed
+    assert result.details == [".github/workflows/ghcr-cleanup.yml"]
+
+
+def test_root_ci_workflows_matches_ghcr_cleanup_template(tmp_path: Path) -> None:
+    """Compare the downstream GHCR cleanup workflow with its template."""
+    checker = load_checker()
+    workflows_dir = tmp_path / ".github" / "workflows"
+    templates_dir = tmp_path / ".openads-dev-environment" / ".github" / "workflow_calls"
+    workflows_dir.mkdir(parents=True)
+    templates_dir.mkdir(parents=True)
+    workflow_names = (
+        "compose-oci.yml",
+        "consistency.yml",
+        "docs.yml",
+        "ghcr-cleanup.yml",
+        "helm-oci.yml",
+    )
+    for workflow_name in workflow_names:
+        (workflows_dir / workflow_name).write_text("name: workflow\n")
+        (templates_dir / workflow_name).write_text("name: workflow\n")
+    (templates_dir / "ghcr-cleanup.yml").write_text("name: workflow\nsecrets: inherit\n")
+
+    result = checker.check_root_ci_workflows_match_templates(checker.CheckContext(tmp_path))
+
+    assert not result.passed
+    assert len(result.details) == 1
+    assert ".github/workflows/ghcr-cleanup.yml" in result.details[0]

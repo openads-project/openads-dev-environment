@@ -1,0 +1,22 @@
+name: ghcr-cleanup
+
+on:
+  workflow_call:
+    inputs:
+
+jobs:
+  ghcr-cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+        with:
+          dry-run: true # TODO: false
+          use-regex: true
+          delete-tags: ".*_ci.*"
+          exclude-tags: "^v[0-9]+.[0-9]+.[0-9]+"
+          delete-untagged: true
+          delete-ghost-images: true
+          delete-partial-images: true
+          delete-orphaned-images: true

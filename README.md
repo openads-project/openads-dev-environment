@@ -201,9 +201,9 @@ The [`check_downstream_consistency.py`](scripts/check_downstream_consistency.py)
 | `helm_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_helm.py --check` reports that `helm/Chart.yaml` and `helm/values.yaml` match the current repository and default launch metadata. Re-run the generator and commit the result until the check is clean. |
 | `no_top_level_package_xml` | Passes when the repository root does not contain a `package.xml`. ROS packages must live in subdirectories instead of treating the whole repository as one package. |
 | `readme_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_readme.py` produces no README content changes and no additional git status changes. Re-run the generator and commit the result until a second run is clean. |
-| `required_root_ci_workflows` | Passes when `.github/workflows/` contains `docker-ros.yml`, `docs.yml`, and `consistency.yml`. |
+| `required_root_ci_workflows` | Passes when `.github/workflows/` contains `compose-oci.yml`, `consistency.yml`, `docker-ros.yml`, `docs.yml`, `ghcr-cleanup.yml`, and `helm-oci.yml`. |
 | `required_top_level_symlinks` | Passes when the repository root contains symlinks `.devcontainer -> .openads-dev-environment/.devcontainer/`, `.vscode -> .openads-dev-environment/.vscode/`, and `.pre-commit-config.yaml -> .openads-dev-environment/.pre-commit-config.yaml`. |
-| `root_ci_workflows_match_templates` | Passes when the root workflow files `.github/workflows/docs.yml` and `.github/workflows/consistency.yml` contain at least the content of the corresponding templates in `.openads-dev-environment/.github/workflow_calls/`. |
+| `root_ci_workflows_match_templates` | Passes when the root workflow files `.github/workflows/compose-oci.yml`, `.github/workflows/consistency.yml`, `.github/workflows/docs.yml`, `.github/workflows/ghcr-cleanup.yml`, and `.github/workflows/helm-oci.yml` contain at least the content of the corresponding templates in `.openads-dev-environment/.github/workflow_calls/`. |
 | `ros_cmake_has_required_lint_block` | Passes when every ROS package `CMakeLists.txt` that declares targets with `add_executable(...)` or `add_library(...)` contains the exact required `ament_lint_auto` block, including the configured `.clang-format`, `.clang-tidy`, and `ament_flake8.ini` paths. |
 | `ros_nodes_have_parameter_loader` | Passes when each detected ROS node source file defines the required parameter helper: `declareAndLoadParameter` for C++ nodes or `declare_and_load_parameter` for Python nodes. |
 | `ros_packagexml_has_required_metadata` | Passes when every ROS package `package.xml` is valid XML and contains non-placeholder `<name>`, non-`0.0.0` `<version>`, `<description>`, at least one non-empty `<license>`, and at least one `<maintainer email="...">...</maintainer>` plus `<author email="...">...</author>` entry that are not left at the default `TODO` placeholder values. |
@@ -222,5 +222,5 @@ This repository stores CI workflow templates for the following use cases. CI wor
 | `consistency` | Runs the [consistency checker](#consistency-checker) to check for repository consistency and convention adherence. |
 | `docker-ros` | Uses [docker-ros](https://github.com/ika-rwth-aachen/docker-ros) to build, test, and push a container image containing the ROS packages of the repository. |
 | `docs` | Builds and deploys documentation using [GitHub Pages](https://docs.github.com/en/pages) or [GitLab Pages](https://docs.gitlab.com/ee/user/project/pages/). |
+| `ghcr-cleanup` | Cleans up unused images in the GitHub Container Registry. |
 | `helm-oci` | Publishes the repository Helm chart as an OCI artifact to the configured container registry. |
-
