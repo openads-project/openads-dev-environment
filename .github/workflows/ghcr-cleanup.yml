@@ -2,7 +2,7 @@ name: ghcr-cleanup
 
 on:
   workflow_call:
-    inputs:
+    inputs: {}
 
 jobs:
   ghcr-cleanup:
