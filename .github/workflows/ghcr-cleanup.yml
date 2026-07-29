@@ -49,7 +49,7 @@ jobs:
           dry-run: true # TODO: false
           use-regex: true
           delete-tags: ".*"
-          exclude-tags: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          exclude-tags: '^[0-9]+\.[0-9]+\.[0-9]+$'
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true
