@@ -7,7 +7,7 @@ on:
         description: Path to the Docker Compose file to publish
         required: false
         type: string
-        default: docker/compose/docker-compose.yml
+        default: deployment/compose/docker-compose.yml
       image-name:
         description: Image name to publish the Docker Compose artifact to
         required: false
