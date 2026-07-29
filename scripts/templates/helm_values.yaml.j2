@@ -1,7 +1,7 @@
 openadservice:
   name: {{ chart_name }}
   image: {{ image }}
-  environment:
+  env:
     # --- name ------
     NAMESPACE: {{ namespace }}
     NAME: {{ node_name }}
@@ -29,7 +29,7 @@ openadservice:
 {% for variable in extra_launch_variables %}
     {{ variable.name }}: {{ variable.value }}
 {% endfor %}
-  command:
+  args:
   - /bin/bash
   - -ic
   - |
