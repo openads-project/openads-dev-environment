@@ -87,7 +87,7 @@ dependencies:
 openadservice:
   name: sample-pkg
   image: ghcr.io/openads-project/sample_pkg:v1.0.0
-  environment:
+  env:
     # --- name ------
     NAMESPACE: /
     NAME: sample_pkg
@@ -100,7 +100,7 @@ openadservice:
     LOG_LEVEL: info
     USE_SIM_TIME: false
     PARAMS: /docker-ros/ws/install/sample_pkg/share/sample_pkg/config/params.yml
-  command:
+  args:
   - /bin/bash
   - -ic
   - |
