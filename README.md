@@ -1,7 +1,7 @@
 # openads-dev-environment
 
 <p align="center">
-  <a href="https://github.com/openads-project"><img src="https://img.shields.io/badge/OpenADS-f5ff01"/></a>
+  <a href="https://openads-project.github.io"><img src="https://img.shields.io/badge/OpenADS-45ccc6"/></a>
   <a href="https://www.ros.org"><img src="https://img.shields.io/badge/ROS 2-jazzy-22314e"/></a>
   <a href="https://github.com/openads-project/openads-dev-environment/blob/main/LICENSE"><img src="https://img.shields.io/github/license/openads-project/openads-dev-environment"/></a>
 </p>
