@@ -15,8 +15,8 @@ import pytest
 DEV_ENV_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = DEV_ENV_ROOT / "tests" / "generate-compose"
 GENERATOR_SCRIPT = DEV_ENV_ROOT / "scripts" / "generate_helm.py"
-CHART_PATH = Path("helm/Chart.yaml")
-VALUES_PATH = Path("helm/values.yaml")
+CHART_PATH = Path("deployment/helm/Chart.yaml")
+VALUES_PATH = Path("deployment/helm/values.yaml")
 
 
 def demo_repositories() -> list[Path]:

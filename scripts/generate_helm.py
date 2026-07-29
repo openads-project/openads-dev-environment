@@ -38,8 +38,8 @@ from generate_compose import (
     topic_environment_variables,
 )
 
-CHART_PATH = Path("helm/Chart.yaml")
-VALUES_PATH = Path("helm/values.yaml")
+CHART_PATH = Path("deployment/helm/Chart.yaml")
+VALUES_PATH = Path("deployment/helm/values.yaml")
 
 
 def extract_readme_tagline(readme_path: Path) -> str | None:
@@ -119,7 +119,7 @@ def build_helm(repo_root: Path, gitlab_registry: str | None = None) -> dict[Path
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Generate helm/Chart.yaml and helm/values.yaml")
+    parser = argparse.ArgumentParser(description="Generate Chart.yaml and values.yaml")
     parser.add_argument("repo_root", nargs="?", help="Repository root (defaults to inferred top-level)")
     parser.add_argument("--check", action="store_true", help="Check whether Helm chart output is up to date")
     parser.add_argument(
