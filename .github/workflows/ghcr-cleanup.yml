@@ -22,9 +22,10 @@ jobs:
           packages: ${{ github.event.repository.name }}
           dry-run: true # TODO: false
           use-regex: true
-          delete-tags: ".*_ci.*"
-          exclude-tags: '^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$' # v1.2.3, v1.2.3-dev, v1.2.3-*
           skip-regex-checks: true
+          older-than: 1 month
+          exclude-tags: '^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$' # v1.2.3, v1.2.3-dev, v1.2.3-*
+          delete-tags: ".*_ci.*"
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true
@@ -36,8 +37,10 @@ jobs:
           packages: ${{ github.event.repository.name }}/compose
           dry-run: true # TODO: false
           use-regex: true
+          skip-regex-checks: true
+          older-than: 1 month
+          exclude-tags: '^(v[0-9]+\.[0-9]+\.[0-9]+|main)$' # v1.2.3, main
           delete-tags: ".*"
-          exclude-tags: '^v[0-9]+\.[0-9]+\.[0-9]+$' # v1.2.3
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true
@@ -49,8 +52,10 @@ jobs:
           packages: ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
           dry-run: true # TODO: false
           use-regex: true
+          skip-regex-checks: true
+          older-than: 1 month
+          exclude-tags: '^[0-9]+\.[0-9]+\.[0-9]+(-main)?$' # 1.2.3, 1.2.3-main
           delete-tags: ".*"
-          exclude-tags: '^[0-9]+\.[0-9]+\.[0-9]+$' # 1.2.3
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true

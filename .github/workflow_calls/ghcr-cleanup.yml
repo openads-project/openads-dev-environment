@@ -2,7 +2,7 @@ name: ghcr-cleanup
 
 on:
   schedule:
-    - cron: "0 0 * * 0" # every Sunday at 00:00
+    - cron: "0 0 * * 2" # every Tuesday at 00:00
   workflow_dispatch:
 
 jobs:
