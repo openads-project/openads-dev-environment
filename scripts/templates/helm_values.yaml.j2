@@ -1,18 +1,6 @@
 openadservice:
   name: {{ chart_name }}
   image: {{ image }}
-  command:
-  - /bin/bash
-  - -ic
-  - |
-    ros2 launch {{ launch_package }} {{ launch_file_name }} \
-{% for argument in launch_arguments %}
-{% if argument.only_if_set %}
-      ${{ "{" }}{{ argument.env_name }}:+{{ argument.name }}:=${{ "{" }}{{ argument.env_name }}{{ "}" }}{{ "}" }}{{ " \\" if not loop.last else "" }}
-{% else %}
-      {{ argument.name }}:=${{ "{" }}{{ argument.env_name }}{{ "}" }}{{ " \\" if not loop.last else "" }}
-{% endif %}
-{% endfor %}
   environment:
     # --- name ------
     NAMESPACE: {{ namespace }}
@@ -40,6 +28,18 @@ openadservice:
 {% endif %}
 {% for variable in extra_launch_variables %}
     {{ variable.name }}: {{ variable.value }}
+{% endfor %}
+  command:
+  - /bin/bash
+  - -ic
+  - |
+    ros2 launch {{ launch_package }} {{ launch_file_name }} \
+{% for argument in launch_arguments %}
+{% if argument.only_if_set %}
+      ${{ "{" }}{{ argument.env_name }}:+{{ argument.name }}:=${{ "{" }}{{ argument.env_name }}{{ "}" }}{{ "}" }}{{ " \\" if not loop.last else "" }}
+{% else %}
+      {{ argument.name }}:=${{ "{" }}{{ argument.env_name }}{{ "}" }}{{ " \\" if not loop.last else "" }}
+{% endif %}
 {% endfor %}
 {% if params_default_path %}
   rosParamFileMountPath: {{ params_default_path }}

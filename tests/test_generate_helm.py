@@ -87,19 +87,6 @@ dependencies:
 openadservice:
   name: sample-pkg
   image: ghcr.io/openads-project/sample_pkg:v1.0.0
-  command:
-  - /bin/bash
-  - -ic
-  - |
-    ros2 launch sample_pkg sample_pkg_launch.py \\
-      namespace:=${NAMESPACE} \\
-      name:=${NAME} \\
-      log_level:=${LOG_LEVEL} \\
-      use_sim_time:=${USE_SIM_TIME} \\
-      params:=${PARAMS} \\
-      input_topic:=${INPUT_TOPIC} \\
-      output_topic:=${OUTPUT_TOPIC} \\
-      service_topic:=${SERVICE_TOPIC}
   environment:
     # --- name ------
     NAMESPACE: /
@@ -113,6 +100,19 @@ openadservice:
     LOG_LEVEL: info
     USE_SIM_TIME: false
     PARAMS: /docker-ros/ws/install/sample_pkg/share/sample_pkg/config/params.yml
+  command:
+  - /bin/bash
+  - -ic
+  - |
+    ros2 launch sample_pkg sample_pkg_launch.py \\
+      namespace:=${NAMESPACE} \\
+      name:=${NAME} \\
+      log_level:=${LOG_LEVEL} \\
+      use_sim_time:=${USE_SIM_TIME} \\
+      params:=${PARAMS} \\
+      input_topic:=${INPUT_TOPIC} \\
+      output_topic:=${OUTPUT_TOPIC} \\
+      service_topic:=${SERVICE_TOPIC}
   rosParamFileMountPath: /docker-ros/ws/install/sample_pkg/share/sample_pkg/config/params.yml
   rosParamFileData: null
 """
