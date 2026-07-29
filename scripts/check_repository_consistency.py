@@ -253,6 +253,15 @@ def clone_repo_at_head(source_repo: Path, destination: Path) -> str | None:
     if clone.returncode != 0:
         return clone.stderr.strip() or "git clone failed"
 
+    source_origin = run_git(["remote", "get-url", "origin"], cwd=source_repo)
+    if source_origin.returncode == 0 and source_origin.stdout.strip():
+        set_origin = run_git(
+            ["remote", "set-url", "origin", source_origin.stdout.strip()],
+            cwd=destination,
+        )
+        if set_origin.returncode != 0:
+            return set_origin.stderr.strip() or "git remote set-url origin failed"
+
     checkout = run_git(["checkout", "--detach", "HEAD"], cwd=destination)
     if checkout.returncode != 0:
         return checkout.stderr.strip() or "git checkout failed"
@@ -380,7 +389,7 @@ def compare_consistency_snapshots(
     local_revision: str,
     remote_revision: str,
     check_ids: list[str],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str]]:
     with tempfile.TemporaryDirectory(prefix="consistency-dev-env-compare-") as tmp_dir_str:
         tmp_dir = Path(tmp_dir_str)
         local_repo = tmp_dir / "local"
@@ -394,7 +403,7 @@ def compare_consistency_snapshots(
             overlay_local_dev_environment=True,
         )
         if local_error is not None:
-            return [], [f"Failed to prepare local dev-environment snapshot: {local_error}"]
+            return [], [f"Failed to prepare local dev-environment snapshot: {local_error}"], [], []
 
         remote_error = prepare_comparison_repo(
             repo_root,
@@ -403,11 +412,34 @@ def compare_consistency_snapshots(
             remote_repo,
         )
         if remote_error is not None:
-            return [], [f"Failed to prepare origin/main dev-environment snapshot: {remote_error}"]
+            return [], [f"Failed to prepare origin/main dev-environment snapshot: {remote_error}"], [], []
 
-        local_run = run_consistency_snapshot(local_repo, check_ids)
-        remote_run = run_consistency_snapshot(remote_repo, check_ids)
+        try:
+            local_checker = (
+                local_repo / ".openads-dev-environment" / "scripts" / "check_repository_consistency.py"
+            ).read_text()
+            remote_checker = (
+                remote_repo / ".openads-dev-environment" / "scripts" / "check_repository_consistency.py"
+            ).read_text()
+        except OSError as err:
+            return [], [f"Failed to inspect comparison checker capabilities: {err}"], [], []
 
+        def is_declared(checker_text: str, check_id: str) -> bool:
+            return bool(re.search(rf'^\s*"{re.escape(check_id)}"\s*:', checker_text, re.MULTILINE))
+
+        compared_check_ids = [
+            check_id
+            for check_id in check_ids
+            if is_declared(local_checker, check_id) and is_declared(remote_checker, check_id)
+        ]
+        skipped_check_ids = [
+            check_id for check_id in check_ids if check_id not in compared_check_ids
+        ]
+        if not compared_check_ids:
+            return [], [], [], skipped_check_ids
+
+        local_run = run_consistency_snapshot(local_repo, compared_check_ids)
+        remote_run = run_consistency_snapshot(remote_repo, compared_check_ids)
     comparison_errors: list[str] = []
     if local_run.returncode == 2:
         comparison_errors.append("Local dev-environment consistency checker rejected the comparison arguments.")
@@ -418,10 +450,10 @@ def compare_consistency_snapshots(
             comparison_errors.append("local output:\n" + local_run.output.strip())
         if remote_run.output.strip():
             comparison_errors.append("origin/main output:\n" + remote_run.output.strip())
-        return [], comparison_errors
+        return [], comparison_errors, compared_check_ids, skipped_check_ids
 
     differences: list[str] = []
-    for check_id in check_ids:
+    for check_id in compared_check_ids:
         local_result = local_run.results.get(check_id)
         remote_result = remote_run.results.get(check_id)
         if local_result is None or remote_result is None:
@@ -445,7 +477,7 @@ def compare_consistency_snapshots(
             f"origin/main {remote_status} ({remote_message})"
         )
 
-    return differences, []
+    return differences, [], compared_check_ids, skipped_check_ids
 
 
 def has_doxygen_description(member: ET.Element) -> bool:
@@ -1854,7 +1886,9 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
                 details=base_details,
             )
 
-        differences, comparison_errors = compare_consistency_snapshots(
+        (
+            differences, comparison_errors, compared_check_ids, skipped_check_ids
+        ) = compare_consistency_snapshots(
             ctx.repo_root,
             submodule_dir,
             local_hash,
@@ -1870,6 +1904,13 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
                 details=base_details + comparison_errors,
             )
 
+        comparison_details: list[str] = []
+        if compared_check_ids:
+            comparison_details.append(f"Compared checks: {', '.join(compared_check_ids)}")
+        if skipped_check_ids:
+            comparison_details.append(
+                f"Skipped cross-version checks not supported by both revisions: {', '.join(skipped_check_ids)}"
+            )
         if differences:
             return CheckResult(
                 check_id="dev_environment_at_remote_main",
@@ -1880,9 +1921,8 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
                 ),
                 details=base_details
                 + [
-                    f"Compared checks: {', '.join(comparison_check_ids)}",
-                    "Outcome differences:",
-                    *differences,
+                    *comparison_details,
+                    "Outcome differences:\n" + "\n".join(f"- {difference}" for difference in differences),
                 ],
             )
 
@@ -1892,8 +1932,11 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
             passed=True,
             message=(
                 "Submodule HEAD differs from remote origin/main, but selected check outcomes match"
+                if compared_check_ids
+                else "Submodule HEAD differs from remote origin/main, but selected checks are not "
+                "available in both revisions"
             ),
-            details=base_details + [f"Compared checks: {', '.join(comparison_check_ids)}"],
+            details=base_details + comparison_details,
         )
 
     return CheckResult(
