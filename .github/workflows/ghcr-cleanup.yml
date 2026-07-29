@@ -10,8 +10,10 @@ jobs:
     permissions:
       packages: write
     steps:
-      - uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+      - name: Cleanup ${{ github.repository }}
+        uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
+          packages: ${{ github.repository }}
           dry-run: true # TODO: false
           use-regex: true
           delete-tags: ".*_ci.*"
@@ -20,3 +22,30 @@ jobs:
           delete-ghost-images: true
           delete-partial-images: true
           delete-orphaned-images: true
+          validate: true
+      - name: Cleanup ${{ github.repository }}/compose
+        uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+        with:
+          packages: ${{ github.repository }}/compose
+          dry-run: true # TODO: false
+          use-regex: true
+          delete-tags: ".*"
+          exclude-tags: "^v[0-9]+.[0-9]+.[0-9]+"
+          delete-untagged: true
+          delete-ghost-images: true
+          delete-partial-images: true
+          delete-orphaned-images: true
+          validate: true
+      - name: Cleanup ${{ github.repository }}/helm
+        uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+        with:
+          packages: ${{ github.repository }}/helm
+          dry-run: true # TODO: false
+          use-regex: true
+          delete-tags: ".*"
+          exclude-tags: "^v[0-9]+.[0-9]+.[0-9]+"
+          delete-untagged: true
+          delete-ghost-images: true
+          delete-partial-images: true
+          delete-orphaned-images: true
+          validate: true
