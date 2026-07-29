@@ -23,7 +23,8 @@ jobs:
           dry-run: true # TODO: false
           use-regex: true
           delete-tags: ".*_ci.*"
-          exclude-tags: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          exclude-tags: '^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$' # v1.2.3, v1.2.3-dev, v1.2.3-*
+          skip-regex-checks: true
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true
@@ -36,7 +37,7 @@ jobs:
           dry-run: true # TODO: false
           use-regex: true
           delete-tags: ".*"
-          exclude-tags: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          exclude-tags: '^v[0-9]+\.[0-9]+\.[0-9]+$' # v1.2.3
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true
@@ -49,7 +50,7 @@ jobs:
           dry-run: true # TODO: false
           use-regex: true
           delete-tags: ".*"
-          exclude-tags: '^[0-9]+\.[0-9]+\.[0-9]+$'
+          exclude-tags: '^[0-9]+\.[0-9]+\.[0-9]+$' # 1.2.3
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true
