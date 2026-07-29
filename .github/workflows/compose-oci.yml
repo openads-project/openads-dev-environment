@@ -17,7 +17,7 @@ on:
         description: Image tag to publish the Docker Compose artifact to
         required: false
         type: string
-        default: ${{ github.ref_name }}
+        default: ${{ github.head_ref || github.ref_name }}
 
 jobs:
   compose-oci:
