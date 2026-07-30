@@ -15,7 +15,7 @@ import pytest
 DEV_ENV_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = DEV_ENV_ROOT / "tests" / "generate-compose"
 GENERATOR_SCRIPT = DEV_ENV_ROOT / "scripts" / "generate_compose.py"
-COMPOSE_PATH = Path("docker/compose/docker-compose.yml")
+COMPOSE_PATH = Path("deployment/compose/docker-compose.yml")
 
 
 def demo_repositories() -> list[Path]:

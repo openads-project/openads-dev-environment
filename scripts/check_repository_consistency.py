@@ -253,6 +253,15 @@ def clone_repo_at_head(source_repo: Path, destination: Path) -> str | None:
     if clone.returncode != 0:
         return clone.stderr.strip() or "git clone failed"
 
+    source_origin = run_git(["remote", "get-url", "origin"], cwd=source_repo)
+    if source_origin.returncode == 0 and source_origin.stdout.strip():
+        set_origin = run_git(
+            ["remote", "set-url", "origin", source_origin.stdout.strip()],
+            cwd=destination,
+        )
+        if set_origin.returncode != 0:
+            return set_origin.stderr.strip() or "git remote set-url origin failed"
+
     checkout = run_git(["checkout", "--detach", "HEAD"], cwd=destination)
     if checkout.returncode != 0:
         return checkout.stderr.strip() or "git checkout failed"
@@ -380,7 +389,7 @@ def compare_consistency_snapshots(
     local_revision: str,
     remote_revision: str,
     check_ids: list[str],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str]]:
     with tempfile.TemporaryDirectory(prefix="consistency-dev-env-compare-") as tmp_dir_str:
         tmp_dir = Path(tmp_dir_str)
         local_repo = tmp_dir / "local"
@@ -394,7 +403,7 @@ def compare_consistency_snapshots(
             overlay_local_dev_environment=True,
         )
         if local_error is not None:
-            return [], [f"Failed to prepare local dev-environment snapshot: {local_error}"]
+            return [], [f"Failed to prepare local dev-environment snapshot: {local_error}"], [], []
 
         remote_error = prepare_comparison_repo(
             repo_root,
@@ -403,11 +412,34 @@ def compare_consistency_snapshots(
             remote_repo,
         )
         if remote_error is not None:
-            return [], [f"Failed to prepare origin/main dev-environment snapshot: {remote_error}"]
+            return [], [f"Failed to prepare origin/main dev-environment snapshot: {remote_error}"], [], []
 
-        local_run = run_consistency_snapshot(local_repo, check_ids)
-        remote_run = run_consistency_snapshot(remote_repo, check_ids)
+        try:
+            local_checker = (
+                local_repo / ".openads-dev-environment" / "scripts" / "check_repository_consistency.py"
+            ).read_text()
+            remote_checker = (
+                remote_repo / ".openads-dev-environment" / "scripts" / "check_repository_consistency.py"
+            ).read_text()
+        except OSError as err:
+            return [], [f"Failed to inspect comparison checker capabilities: {err}"], [], []
 
+        def is_declared(checker_text: str, check_id: str) -> bool:
+            return bool(re.search(rf'^\s*"{re.escape(check_id)}"\s*:', checker_text, re.MULTILINE))
+
+        compared_check_ids = [
+            check_id
+            for check_id in check_ids
+            if is_declared(local_checker, check_id) and is_declared(remote_checker, check_id)
+        ]
+        skipped_check_ids = [
+            check_id for check_id in check_ids if check_id not in compared_check_ids
+        ]
+        if not compared_check_ids:
+            return [], [], [], skipped_check_ids
+
+        local_run = run_consistency_snapshot(local_repo, compared_check_ids)
+        remote_run = run_consistency_snapshot(remote_repo, compared_check_ids)
     comparison_errors: list[str] = []
     if local_run.returncode == 2:
         comparison_errors.append("Local dev-environment consistency checker rejected the comparison arguments.")
@@ -418,10 +450,10 @@ def compare_consistency_snapshots(
             comparison_errors.append("local output:\n" + local_run.output.strip())
         if remote_run.output.strip():
             comparison_errors.append("origin/main output:\n" + remote_run.output.strip())
-        return [], comparison_errors
+        return [], comparison_errors, compared_check_ids, skipped_check_ids
 
     differences: list[str] = []
-    for check_id in check_ids:
+    for check_id in compared_check_ids:
         local_result = local_run.results.get(check_id)
         remote_result = remote_run.results.get(check_id)
         if local_result is None or remote_result is None:
@@ -445,7 +477,7 @@ def compare_consistency_snapshots(
             f"origin/main {remote_status} ({remote_message})"
         )
 
-    return differences, []
+    return differences, [], compared_check_ids, skipped_check_ids
 
 
 def has_doxygen_description(member: ET.Element) -> bool:
@@ -1692,10 +1724,12 @@ def check_required_top_level_symlinks(ctx: CheckContext) -> CheckResult:
 
 def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
     required_workflows = (
-        "docker-ros.yml",
         "compose-oci.yml",
-        "docs.yml",
         "consistency.yml",
+        "docker-ros.yml",
+        "docs.yml",
+        "ghcr-cleanup.yml",
+        "helm-oci.yml",
     )
     workflows_dir = ctx.repo_root / ".github" / "workflows"
 
@@ -1726,8 +1760,10 @@ def check_required_root_ci_workflows(ctx: CheckContext) -> CheckResult:
 def check_root_ci_workflows_match_templates(ctx: CheckContext) -> CheckResult:
     workflow_files = (
         "compose-oci.yml",
-        "docs.yml",
         "consistency.yml",
+        "docs.yml",
+        "ghcr-cleanup.yml",
+        "helm-oci.yml",
     )
     root_workflows_dir = ctx.repo_root / ".github" / "workflows"
     template_workflows_dir = (
@@ -1852,7 +1888,9 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
                 details=base_details,
             )
 
-        differences, comparison_errors = compare_consistency_snapshots(
+        (
+            differences, comparison_errors, compared_check_ids, skipped_check_ids
+        ) = compare_consistency_snapshots(
             ctx.repo_root,
             submodule_dir,
             local_hash,
@@ -1868,6 +1906,13 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
                 details=base_details + comparison_errors,
             )
 
+        comparison_details: list[str] = []
+        if compared_check_ids:
+            comparison_details.append(f"Compared checks: {', '.join(compared_check_ids)}")
+        if skipped_check_ids:
+            comparison_details.append(
+                f"Skipped cross-version checks not supported by both revisions: {', '.join(skipped_check_ids)}"
+            )
         if differences:
             return CheckResult(
                 check_id="dev_environment_at_remote_main",
@@ -1878,9 +1923,8 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
                 ),
                 details=base_details
                 + [
-                    f"Compared checks: {', '.join(comparison_check_ids)}",
-                    "Outcome differences:",
-                    *differences,
+                    *comparison_details,
+                    "Outcome differences:\n" + "\n".join(f"- {difference}" for difference in differences),
                 ],
             )
 
@@ -1890,8 +1934,11 @@ def check_dev_environment_at_remote_main(ctx: CheckContext) -> CheckResult:
             passed=True,
             message=(
                 "Submodule HEAD differs from remote origin/main, but selected check outcomes match"
+                if compared_check_ids
+                else "Submodule HEAD differs from remote origin/main, but selected checks are not "
+                "available in both revisions"
             ),
-            details=base_details + [f"Compared checks: {', '.join(comparison_check_ids)}"],
+            details=base_details + comparison_details,
         )
 
     return CheckResult(
@@ -2040,6 +2087,45 @@ def check_compose_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
     )
 
 
+def check_helm_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
+    """Check that the committed Helm chart matches generator output."""
+    generator_script = ctx.repo_root / ".openads-dev-environment" / "scripts" / "generate_helm.py"
+    if not generator_script.exists():
+        return CheckResult(
+            check_id="helm_generator_is_idempotent",
+            name="Helm chart generator output is up to date",
+            passed=False,
+            message="Helm chart generator script is missing",
+            details=[str(generator_script)],
+        )
+
+    run_result = run_command(
+        [sys.executable, str(generator_script), "--check", str(ctx.repo_root)],
+        cwd=ctx.repo_root,
+    )
+    if run_result.returncode != 0:
+        details: list[str] = [f"exit code: {run_result.returncode}"]
+        if run_result.stderr.strip():
+            details.append(f"stderr: {run_result.stderr.strip()}")
+        if run_result.stdout.strip():
+            details.append(f"stdout: {run_result.stdout.strip()}")
+        return CheckResult(
+            check_id="helm_generator_is_idempotent",
+            name="Helm chart generator output is up to date",
+            passed=False,
+            message="Helm chart is not generated from the current launch metadata",
+            details=details,
+        )
+
+    return CheckResult(
+        check_id="helm_generator_is_idempotent",
+        name="Helm chart generator output is up to date",
+        passed=True,
+        message="Helm chart matches generator output",
+        details=[],
+    )
+
+
 def check_generated_readmes_have_no_todo(ctx: CheckContext) -> CheckResult:
     offenders: list[str] = []
 
@@ -2169,6 +2255,10 @@ CHECKS: dict[str, tuple[str, CheckFn]] = {
     "compose_generator_is_idempotent": (
         "Docker Compose generator output is up to date",
         check_compose_generator_is_idempotent,
+    ),
+    "helm_generator_is_idempotent": (
+        "Helm chart generator output is up to date",
+        check_helm_generator_is_idempotent,
     ),
     "generated_readmes_have_no_todo": (
         'Top-level and generated package READMEs contain no "TODO"',

@@ -1,0 +1,44 @@
+name: helm-oci
+
+on:
+  workflow_call:
+    inputs:
+      chart-folder:
+        description: Path to the Helm chart folder to publish
+        required: false
+        type: string
+        default: deployment/helm
+
+jobs:
+  helm-oci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Temporarily modify chart version to '1.2.3-<GIT-REF>'
+        if: ${{ github.ref_type != 'tag' }}
+        shell: bash
+        env:
+          CHART_FOLDER: ${{ inputs.chart-folder }}
+          REF_NAME: ${{ github.head_ref || github.ref_name }}
+        run: |
+          chart_file="${CHART_FOLDER}/Chart.yaml"
+          base_version=$(sed -nE "s/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p" "${chart_file}")
+          ref_slug=$(echo "${REF_NAME}" | sed -E "s/[^a-zA-Z0-9-]+/-/g; s/^-+//; s/-+$//")
+          if [[ -z "${base_version}" || -z "${ref_slug}" ]]; then
+            echo "Could not determine a valid chart version or Git ref slug" >&2
+            exit 1
+          fi
+          chart_version="${base_version}-${ref_slug}"
+          sed -i -E "s/^version:.*$/version: ${chart_version}/" "${chart_file}"
+          echo "Publishing chart version ${chart_version}"
+      - name: Push Helm chart as OCI artifact
+        uses: bsord/helm-push@5ec3320fb5720a0a5aa210d871999f2b836f2d97
+        with:
+          useOCIRegistry: true
+          registry-url:  oci://ghcr.io/${{ github.repository }}/helm
+          username: ${{ github.actor }}
+          access-token: ${{ secrets.GITHUB_TOKEN }}
+          chart-folder: ${{ inputs.chart-folder }}
+          update-dependencies: true
+          force: true

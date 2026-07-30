@@ -1,0 +1,63 @@
+name: ghcr-cleanup
+
+on:
+  workflow_call:
+    inputs: {}
+
+jobs:
+  ghcr-cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Determine package names
+        id: package
+        shell: bash
+        run: |
+          repository_name='${{ github.event.repository.name }}'
+          echo "helm_chart_name=${repository_name//_/-}" >> "$GITHUB_OUTPUT"
+      - name: Cleanup ${{ github.repository }}
+        uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+        with:
+          packages: ${{ github.event.repository.name }}
+          dry-run: false
+          use-regex: true
+          skip-regex-checks: true
+          older-than: 1 month
+          exclude-tags: '^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$' # v1.2.3, v1.2.3-dev, v1.2.3-*
+          delete-tags: ".*_ci.*"
+          delete-untagged: true
+          delete-ghost-images: true
+          delete-partial-images: true
+          delete-orphaned-images: true
+          validate: true
+      - name: Cleanup ${{ github.repository }}/compose
+        uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+        with:
+          packages: ${{ github.event.repository.name }}/compose
+          dry-run: false
+          use-regex: true
+          skip-regex-checks: true
+          older-than: 1 month
+          exclude-tags: '^(v[0-9]+\.[0-9]+\.[0-9]+|main)$' # v1.2.3, main
+          delete-tags: ".*"
+          delete-untagged: true
+          delete-ghost-images: true
+          delete-partial-images: true
+          delete-orphaned-images: true
+          validate: true
+      - name: Cleanup ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
+        uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+        with:
+          packages: ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
+          dry-run: false
+          use-regex: true
+          skip-regex-checks: true
+          older-than: 1 month
+          exclude-tags: '^[0-9]+\.[0-9]+\.[0-9]+(-main)?$' # 1.2.3, 1.2.3-main
+          delete-tags: ".*"
+          delete-untagged: true
+          delete-ghost-images: true
+          delete-partial-images: true
+          delete-orphaned-images: true
+          validate: true

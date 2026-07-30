@@ -7,17 +7,17 @@ on:
         description: Path to the Docker Compose file to publish
         required: false
         type: string
-        default: docker/compose/docker-compose.yml
+        default: deployment/compose/docker-compose.yml
       image-name:
         description: Image name to publish the Docker Compose artifact to
         required: false
         type: string
-        default: ghcr.io/${{ github.repository }}
+        default: ghcr.io/${{ github.repository }}/compose
       image-tag:
         description: Image tag to publish the Docker Compose artifact to
         required: false
         type: string
-        default: compose-${{ github.ref_name }}
+        default: ${{ github.head_ref || github.ref_name }}
 
 jobs:
   compose-oci:

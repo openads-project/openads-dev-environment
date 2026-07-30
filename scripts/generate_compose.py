@@ -30,7 +30,7 @@ except ModuleNotFoundError as exc:
 
 
 DEFAULT_NAMESPACE = "/"
-COMPOSE_PATH = Path("docker/compose/docker-compose.yml")
+COMPOSE_PATH = Path("deployment/compose/docker-compose.yml")
 GITLAB_REGISTRY_ENV_NAME = "OPENADS_GITLAB_REGISTRY"
 STANDARD_LAUNCH_ARGUMENT_NAMES = ("namespace", "name", "log_level", "use_sim_time", "params")
 
@@ -603,7 +603,7 @@ def resolve_repo_root(raw_repo_root: str | None) -> Path:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Generate docker/compose/docker-compose.yml from the default launch file")
+    parser = argparse.ArgumentParser(description="Generate docker-compose.yml from the default launch file")
     parser.add_argument("repo_root", nargs="?", help="Repository root (defaults to inferred top-level)")
     parser.add_argument("--check", action="store_true", help="Check whether docker compose output is up to date")
     parser.add_argument(
