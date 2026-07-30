@@ -20,7 +20,7 @@ jobs:
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
           packages: ${{ github.event.repository.name }}
-          dry-run: true # TODO: false
+          dry-run: false
           use-regex: true
           skip-regex-checks: true
           older-than: 1 month
@@ -35,7 +35,7 @@ jobs:
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
           packages: ${{ github.event.repository.name }}/compose
-          dry-run: true # TODO: false
+          dry-run: false
           use-regex: true
           skip-regex-checks: true
           older-than: 1 month
@@ -50,7 +50,7 @@ jobs:
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
           packages: ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
-          dry-run: true # TODO: false
+          dry-run: false
           use-regex: true
           skip-regex-checks: true
           older-than: 1 month
