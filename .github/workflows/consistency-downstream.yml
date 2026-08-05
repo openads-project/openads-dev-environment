@@ -46,7 +46,9 @@ jobs:
             https://github.com/openads-project/ros_middleware_bridge.git \
             https://github.com/openads-project/simple_planner.git \
             https://github.com/openads-project/simulation_adapter.git \
-            https://github.com/openads-project/trajectory_optimization.git
+            https://github.com/openads-project/trajectory_optimization.git \
+            https://github.com/thinking-cars/autonomy_datasets.git \
+            https://github.com/thinking-cars/autoware_multi_object_tracker.git
 
           if [ ! -s "${comment_file}" ]; then
             echo "Downstream consistency report was not generated." | tee "${comment_file}" >> "${GITHUB_STEP_SUMMARY}"
