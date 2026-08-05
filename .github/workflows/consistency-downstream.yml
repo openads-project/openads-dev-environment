@@ -39,7 +39,7 @@ jobs:
             https://github.com/openads-project/lanelet2_object_list_prediction.git \
             https://github.com/openads-project/lanelet2_route_planning.git \
             https://github.com/openads-project/monitoring.git \
-            https://github.com/openads-project/openads_demo_module.git \
+            https://github.com/openads-project/openads_demo_service.git \
             https://github.com/openads-project/point_cloud_fusion.git \
             https://github.com/openads-project/point_cloud_object_detection.git \
             https://github.com/openads-project/ros2_graph_export.git \
