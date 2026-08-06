@@ -29,11 +29,20 @@ jobs:
         id: check-compose
         shell: bash
         run: |
-          if [[ -f "${{ inputs.compose-file }}" ]]; then
-            echo "compose-exists=true" >> "${GITHUB_OUTPUT}"
+          compose_file="${{ inputs.compose-file }}"
+          if [[ -f "${compose_file}" ]]; then
+            compose_files=${compose_file}
+          elif [[ "${compose_file}" == "deployment/compose/docker-compose.yml" ]]; then
+            compose_files=$(find deployment/compose -maxdepth 1 -type f -name 'docker-compose.*.yml' 2>/dev/null | sort | tr '\n' ' ')
           else
-            echo "compose-exists=false" >> "${GITHUB_OUTPUT}"
+            compose_files=
           fi
+          if [[ -n "${compose_files}" ]]; then
+            echo "compose-exists=true"
+            echo "compose-files=${compose_files}"
+          else
+            echo "compose-exists=false"
+          fi >> "${GITHUB_OUTPUT}"
       - name: Slugify ref name
         if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
         id: slugify-ref-name
@@ -61,6 +70,19 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push Docker Compose artifact
         if: ${{ steps.check-compose.outputs.compose-exists == 'true' }}
+        env:
+          COMPOSE_FILES: ${{ steps.check-compose.outputs.compose-files }}
+          IMAGE: ${{ steps.artifact.outputs.image }}
+          IMAGE_TAG: ${{ steps.artifact.outputs.tag }}
         run: |
-          docker compose -f "${{ steps.artifact.outputs.compose-file }}" \
-            publish --with-env --yes "${{ steps.artifact.outputs.image }}:${{ steps.artifact.outputs.tag }}"
+          for compose_file in ${COMPOSE_FILES}; do
+            artifact_tag=${IMAGE_TAG}
+            if [[ "${compose_file}" != "${{ steps.artifact.outputs.compose-file }}" ]]; then
+              filename=${compose_file##*/}
+              suffix=${filename#docker-compose.}
+              suffix=${suffix%.yml}
+              artifact_tag="${IMAGE_TAG}-${suffix}"
+            fi
+            docker compose -f "${compose_file}" \
+              publish --with-env --yes "${IMAGE}:${artifact_tag}"
+          done

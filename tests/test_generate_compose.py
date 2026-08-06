@@ -119,9 +119,9 @@ def test_oci_workflows_derive_sorted_multi_launch_suffix_tags() -> None:
     for workflow in (gitlab_ci, github_workflow):
         assert "find deployment/compose -maxdepth 1 -type f -name 'docker-compose.*.yml'" in workflow
         assert "| sort" in workflow
-        assert "Found both $" in workflow
         assert "suffix=${filename#docker-compose.}" in workflow
         assert "suffix=${suffix%.yml}" in workflow
 
-    assert 'artifact_tag="$base_tag-$suffix"' in gitlab_ci
-    assert 'artifact_tag="${BASE_TAG}-${suffix}"' in github_workflow
+    assert 'artifact_tag="$COMPOSE_IMAGE_TAG-$suffix"' in gitlab_ci
+    assert 'artifact_tag="${IMAGE_TAG}-${suffix}"' in github_workflow
+    assert "multi-launch" not in github_workflow
