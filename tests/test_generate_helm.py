@@ -15,12 +15,13 @@ import pytest
 DEV_ENV_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = DEV_ENV_ROOT / "tests" / "generate-compose"
 GENERATOR_SCRIPT = DEV_ENV_ROOT / "scripts" / "generate_helm.py"
+COMPOSE_PATH = Path("deployment/compose/docker-compose.yml")
 CHART_PATH = Path("deployment/helm/Chart.yaml")
 VALUES_PATH = Path("deployment/helm/values.yaml")
 
 
 def demo_repositories() -> list[Path]:
-    return sorted(path for path in FIXTURES_DIR.iterdir() if path.is_dir())
+    return sorted(path for path in FIXTURES_DIR.iterdir() if path.is_dir() and (path / COMPOSE_PATH).is_file())
 
 
 def prepare_repository(source: Path, destination: Path) -> Path:

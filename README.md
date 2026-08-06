@@ -152,7 +152,7 @@ The package README generator derives ROS interface documentation from source and
 
 ### Docker Compose Generator
 
-Use [`generate_compose.py`](scripts/generate_compose.py) to generate `docker/compose/docker-compose.yml` from the repository's default ROS 2 launch file.
+Use [`generate_compose.py`](scripts/generate_compose.py) to generate Docker Compose deployments from the repository's ROS 2 launch files.
 
 ```bash
 .openads-dev-environment/scripts/generate_compose.py
@@ -164,7 +164,11 @@ To check whether the committed Compose file is up to date without changing it, r
 .openads-dev-environment/scripts/generate_compose.py --check
 ```
 
-The generator expects a ROS package subdirectory with a default launch file in `launch/`. The launch file must define at least one launched `Node` and `DeclareLaunchArgument(...)` entries. A `remappable_topics` list is optional and only controls which topic remaps are exposed and grouped as Compose environment variables.
+The generator expects a ROS package subdirectory with launch files in `launch/`. A package-level `<package>_launch.py` remains the exclusive default and generates `deployment/compose/docker-compose.yml`. Without that default, a single launch file that directly starts the package generates the same output. Multiple directly launching files generate `deployment/compose/docker-compose.<name>.yml`, where `<name>` is the filename without `_launch.py` or `.launch.py`. Launch files that only include other launch files do not create a deployment.
+
+Multi-launch deployments use each launch file's default node name and parameter file. The GitHub and GitLab `compose-oci` jobs publish them below the existing Compose image name with the launch name appended to the ref tag, for example `compose:main-cam_generator`. Single-launch artifact names and tags remain unchanged.
+
+Each directly launching file must define at least one `Node` and `DeclareLaunchArgument(...)` entries. A `remappable_topics` list is optional and only controls which topic remaps are exposed and grouped as Compose environment variables. The generator owns `docker-compose.yml` and `docker-compose.*.yml` below `deployment/compose`; generation removes obsolete outputs and `--check` reports them.
 
 For GitLab remotes, the generator uses the registry from an existing Compose file when available. Otherwise, override the derived registry with `--gitlab-registry <host[:port]>` or `OPENADS_GITLAB_REGISTRY`; if neither is set, it falls back to `<gitlab-host>:5050`.
 
@@ -192,7 +196,7 @@ The [`check_downstream_consistency.py`](scripts/check_downstream_consistency.py)
 
 | Name | Description |
 | --- | --- |
-| `compose_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_compose.py --check` reports that `docker/compose/docker-compose.yml` matches the current default launch metadata. Re-run the generator and commit the result until the check is clean. |
+| `compose_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_compose.py --check` reports that all single- or multi-launch Compose files below `deployment/compose` match the current launch metadata and no obsolete generated files remain. Re-run the generator and commit the result until the check is clean. |
 | `cpp_code_has_doxygen_docs` | Passes when every tracked C++ function that Doxygen discovers has documentation on at least one emitted declaration or definition record. |
 | `default_launch_remappable_topics_cover_node_pubsub` | Passes when each default ROS package launch file lists every string-literal pub/sub/service/client name used by the launched node executables in its `remappable_topics` launch arguments. Packages without a default launch file are skipped. |
 | `dev_environment_at_remote_main` | Passes when `.openads-dev-environment` is present as a git repository and its current `HEAD` exactly matches `origin/main`. Update the submodule if it points to any other commit. |
@@ -218,7 +222,7 @@ This repository stores CI workflow templates for the following use cases. CI wor
 
 | Name | Description |
 | --- | --- |
-| `compose-oci` | Publishes the repository Docker Compose file as an OCI artifact to the configured container registry. |
+| `compose-oci` | Publishes the repository's single- or multi-launch Docker Compose files as OCI artifacts to the configured container registry. |
 | `consistency` | Runs the [consistency checker](#consistency-checker) to check for repository consistency and convention adherence. |
 | `docker-ros` | Uses [docker-ros](https://github.com/ika-rwth-aachen/docker-ros) to build, test, and push a container image containing the ROS packages of the repository. |
 | `docs` | Builds and deploys documentation using [GitHub Pages](https://docs.github.com/en/pages) or [GitLab Pages](https://docs.gitlab.com/ee/user/project/pages/). |
