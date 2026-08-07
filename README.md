@@ -180,6 +180,8 @@ Use [`generate_helm.py`](scripts/generate_helm.py) to generate `helm/Chart.yaml`
 .openads-dev-environment/scripts/generate_helm.py --check
 ```
 
+A single launch deployment keeps the existing `deployment/helm/Chart.yaml` and `deployment/helm/values.yaml` paths and chart name. Multiple directly launching files generate one chart below `deployment/helm/<name>/` per launch file. Multi-launch chart names append the launch name with underscores converted to hyphens, while chart versions remain unchanged. The Helm OCI workflows discover, package, publish, and clean up all generated charts.
+
 ### Consistency Checker
 
 Use [`check_repository_consistency.py`](scripts/check_repository_consistency.py) to run a set of checks that enforce consistency and conventions across repositories. This is set up to be run in CI, but can also be run locally to check for issues before pushing.
@@ -202,7 +204,7 @@ The [`check_downstream_consistency.py`](scripts/check_downstream_consistency.py)
 | `dev_environment_at_remote_main` | Passes when `.openads-dev-environment` is present as a git repository and its current `HEAD` exactly matches `origin/main`. Update the submodule if it points to any other commit. |
 | `docker_ros_ci_has_no_todo` | Passes when root docker-ros CI files, specifically `.github/workflows/docker-ros.yml` and `.gitlab-ci.yml` when present, contain no `TODO` placeholder text. This ensures the template `command` placeholder was replaced with a repository-specific command. |
 | `generated_readmes_have_no_todo` | Passes when the repository top-level `README.md` and every generated package `README.md` contain no `TODO` placeholders. Replace all remaining placeholder text before committing. |
-| `helm_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_helm.py --check` reports that `helm/Chart.yaml` and `helm/values.yaml` match the current repository and default launch metadata. Re-run the generator and commit the result until the check is clean. |
+| `helm_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_helm.py --check` reports that all single- or multi-launch Helm charts below `deployment/helm` match the current launch metadata and no obsolete generated files remain. Re-run the generator and commit the result until the check is clean. |
 | `no_top_level_package_xml` | Passes when the repository root does not contain a `package.xml`. ROS packages must live in subdirectories instead of treating the whole repository as one package. |
 | `readme_generator_is_idempotent` | Passes when running `.openads-dev-environment/scripts/generate_readme.py` produces no README content changes and no additional git status changes. Re-run the generator and commit the result until a second run is clean. |
 | `required_root_ci_workflows` | Passes when `.github/workflows/` contains `compose-oci.yml`, `consistency.yml`, `docker-ros.yml`, `docs.yml`, `ghcr-cleanup.yml`, and `helm-oci.yml`. |
@@ -227,4 +229,4 @@ This repository stores CI workflow templates for the following use cases. CI wor
 | `docker-ros` | Uses [docker-ros](https://github.com/ika-rwth-aachen/docker-ros) to build, test, and push a container image containing the ROS packages of the repository. |
 | `docs` | Builds and deploys documentation using [GitHub Pages](https://docs.github.com/en/pages) or [GitLab Pages](https://docs.gitlab.com/ee/user/project/pages/). |
 | `ghcr-cleanup` | Cleans up unused images in the GitHub Container Registry. |
-| `helm-oci` | Publishes the repository Helm chart as an OCI artifact to the configured container registry. |
+| `helm-oci` | Publishes the repository's single- or multi-launch Helm charts as OCI artifacts to the configured container registry. |

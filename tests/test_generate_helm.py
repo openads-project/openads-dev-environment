@@ -15,13 +15,16 @@ import pytest
 DEV_ENV_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = DEV_ENV_ROOT / "tests" / "generate-compose"
 GENERATOR_SCRIPT = DEV_ENV_ROOT / "scripts" / "generate_helm.py"
-COMPOSE_PATH = Path("deployment/compose/docker-compose.yml")
 CHART_PATH = Path("deployment/helm/Chart.yaml")
 VALUES_PATH = Path("deployment/helm/values.yaml")
+MULTI_LAUNCH_FIXTURE = FIXTURES_DIR / "sample_pkg_multi_launch"
+GITHUB_HELM_WORKFLOW = DEV_ENV_ROOT / ".github" / "workflows" / "helm-oci.yml"
+GITHUB_CLEANUP_WORKFLOW = DEV_ENV_ROOT / ".github" / "workflows" / "ghcr-cleanup.yml"
+GITLAB_CI_TEMPLATE = DEV_ENV_ROOT / ".gitlab-ci.template.yml"
 
 
 def demo_repositories() -> list[Path]:
-    return sorted(path for path in FIXTURES_DIR.iterdir() if path.is_dir() and (path / COMPOSE_PATH).is_file())
+    return sorted(path for path in FIXTURES_DIR.iterdir() if path.is_dir())
 
 
 def prepare_repository(source: Path, destination: Path) -> Path:
@@ -56,8 +59,10 @@ def test_generate_helm_is_idempotent_for_compose_fixtures(source: Path, tmp_path
 
     result = run_generator(repo_root)
     assert result.returncode == 0, result.stderr
-    assert (repo_root / CHART_PATH).is_file()
-    assert (repo_root / VALUES_PATH).is_file()
+    chart_paths = sorted((repo_root / "deployment" / "helm").glob("**/Chart.yaml"))
+    values_paths = sorted((repo_root / "deployment" / "helm").glob("**/values.yaml"))
+    assert chart_paths
+    assert len(chart_paths) == len(values_paths)
 
     check_result = run_generator(repo_root, "--check")
     assert check_result.returncode == 0, (
@@ -119,6 +124,30 @@ openadservice:
 """
 
 
+def test_generate_helm_creates_launch_specific_charts(tmp_path: Path) -> None:
+    repo_root = prepare_repository(MULTI_LAUNCH_FIXTURE, tmp_path)
+
+    result = run_generator(repo_root)
+    assert result.returncode == 0, result.stderr
+
+    helm_dir = repo_root / "deployment" / "helm"
+    first_chart = (helm_dir / "first_node" / "Chart.yaml").read_text(encoding="utf-8")
+    first_values = (helm_dir / "first_node" / "values.yaml").read_text(encoding="utf-8")
+    second_chart = (helm_dir / "second_node" / "Chart.yaml").read_text(encoding="utf-8")
+    second_values = (helm_dir / "second_node" / "values.yaml").read_text(encoding="utf-8")
+
+    assert "name: sample-pkg-multi-launch-first-node\n" in first_chart
+    assert "name: sample-pkg-multi-launch-second-node\n" in second_chart
+    assert "NAME: first_node\n" in first_values
+    assert "config/params.first_node.yml\n" in first_values
+    assert "ros2 launch sample_pkg_multi_launch first_node.launch.py" in first_values
+    assert "NAME: second_node\n" in second_values
+    assert "PARAMS:" not in second_values
+    assert "params:=" not in second_values
+    assert "ros2 launch sample_pkg_multi_launch second_node_launch.py" in second_values
+    assert not (helm_dir / "Chart.yaml").exists()
+
+
 def test_generate_helm_falls_back_to_package_description(tmp_path: Path) -> None:
     repo_root = prepare_repository(FIXTURES_DIR / "sample_pkg", tmp_path)
     (repo_root / "README.md").unlink()
@@ -140,3 +169,47 @@ def test_generate_helm_check_reports_stale_file_without_rewriting(tmp_path: Path
     assert check_result.returncode == 1
     assert "helm/values.yaml" in check_result.stdout
     assert values_path.read_text(encoding="utf-8") == "stale\n"
+
+
+def test_generate_helm_reports_and_removes_obsolete_managed_chart(tmp_path: Path) -> None:
+    repo_root = prepare_repository(MULTI_LAUNCH_FIXTURE, tmp_path)
+    result = run_generator(repo_root)
+    assert result.returncode == 0, result.stderr
+
+    obsolete_chart_dir = repo_root / "deployment" / "helm" / "obsolete"
+    obsolete_chart_dir.mkdir()
+    obsolete_chart = obsolete_chart_dir / "Chart.yaml"
+    obsolete_values = obsolete_chart_dir / "values.yaml"
+    obsolete_chart.write_text("name: obsolete\n", encoding="utf-8")
+    obsolete_values.write_text("obsolete: true\n", encoding="utf-8")
+
+    check_result = run_generator(repo_root, "--check")
+    assert check_result.returncode == 1
+    assert "helm/obsolete/Chart.yaml" in check_result.stdout
+    assert "helm/obsolete/values.yaml" in check_result.stdout
+
+    generate_result = run_generator(repo_root)
+    assert generate_result.returncode == 0
+    assert not obsolete_chart_dir.exists()
+
+
+def test_helm_oci_workflows_discover_and_publish_multiple_charts() -> None:
+    github_workflow = GITHUB_HELM_WORKFLOW.read_text(encoding="utf-8")
+    gitlab_ci = GITLAB_CI_TEMPLATE.read_text(encoding="utf-8")
+    cleanup_workflow = GITHUB_CLEANUP_WORKFLOW.read_text(encoding="utf-8")
+
+    for workflow in (github_workflow, gitlab_ci):
+        assert "find deployment/helm -mindepth 2 -maxdepth 2 -type f -name Chart.yaml" in workflow
+
+    assert "chart-folder: ${{ fromJSON(needs.helm-charts.outputs.chart-folders) }}" in github_workflow
+    assert "chart-folder: ${{ matrix.chart-folder }}" in github_workflow
+    assert "uses: bsord/helm-push@" in github_workflow
+    assert "force: true" in github_workflow
+
+    assert "for chart_folder in" in gitlab_ci
+    assert "helm dependency update" in gitlab_ci
+    assert "helm package" in gitlab_ci
+    assert "helm push" in gitlab_ci
+
+    assert "helm_packages=" in cleanup_workflow
+    assert "packages: ${{ steps.package.outputs.helm_packages }}" in cleanup_workflow

@@ -8,14 +8,23 @@ jobs:
   ghcr-cleanup:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
       - name: Determine package names
         id: package
         shell: bash
         run: |
-          repository_name='${{ github.event.repository.name }}'
-          echo "helm_chart_name=${repository_name//_/-}" >> "$GITHUB_OUTPUT"
+          helm_packages=
+          while IFS= read -r chart_file; do
+            chart_name=$(sed -nE 's/^name:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${chart_file}")
+            [[ -n "${chart_name}" ]] || continue
+            helm_package="${{ github.event.repository.name }}/helm/${chart_name}"
+            helm_packages="${helm_packages:+${helm_packages},}${helm_package}"
+          done < <(find deployment/helm -mindepth 1 -maxdepth 2 -type f -name Chart.yaml 2>/dev/null | sort)
+          echo "helm_packages=${helm_packages}" >> "$GITHUB_OUTPUT"
       - name: Cleanup ${{ github.repository }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
@@ -46,10 +55,11 @@ jobs:
           delete-partial-images: true
           delete-orphaned-images: true
           validate: true
-      - name: Cleanup ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
+      - name: Cleanup Helm charts
+        if: ${{ steps.package.outputs.helm_packages != '' }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
-          packages: ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
+          packages: ${{ steps.package.outputs.helm_packages }}
           dry-run: false
           use-regex: true
           skip-regex-checks: true

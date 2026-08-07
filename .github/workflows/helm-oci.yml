@@ -10,7 +10,43 @@ on:
         default: deployment/helm
 
 jobs:
+  helm-charts:
+    runs-on: ubuntu-latest
+    outputs:
+      chart-folders: ${{ steps.find-helm.outputs.chart-folders }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Find Helm chart folders
+        id: find-helm
+        shell: bash
+        env:
+          CHART_FOLDER: ${{ inputs.chart-folder }}
+        run: |
+          if [[ -f "${CHART_FOLDER}/Chart.yaml" ]]; then
+            printf '%s\n' "${CHART_FOLDER}" > /tmp/chart-folders
+          elif [[ "${CHART_FOLDER}" == "deployment/helm" ]]; then
+            find deployment/helm -mindepth 2 -maxdepth 2 -type f -name Chart.yaml 2>/dev/null \
+              | sed 's#/Chart.yaml$##' \
+              | sort > /tmp/chart-folders
+          else
+            echo "Helm chart not found: ${CHART_FOLDER}/Chart.yaml" >&2
+            exit 1
+          fi
+          if [[ ! -s /tmp/chart-folders ]]; then
+            echo "No Helm charts found below ${CHART_FOLDER}" >&2
+            exit 1
+          fi
+          chart_folders=$(python3 -c 'import json, sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))' < /tmp/chart-folders)
+          echo "chart-folders=${chart_folders}" >> "${GITHUB_OUTPUT}"
+
   helm-oci:
+    needs: helm-charts
+    if: ${{ needs.helm-charts.outputs.chart-folders != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        chart-folder: ${{ fromJSON(needs.helm-charts.outputs.chart-folders) }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -19,7 +55,7 @@ jobs:
         if: ${{ github.ref_type != 'tag' }}
         shell: bash
         env:
-          CHART_FOLDER: ${{ inputs.chart-folder }}
+          CHART_FOLDER: ${{ matrix.chart-folder }}
           REF_NAME: ${{ github.head_ref || github.ref_name }}
         run: |
           chart_file="${CHART_FOLDER}/Chart.yaml"
@@ -39,6 +75,6 @@ jobs:
           registry-url:  oci://ghcr.io/${{ github.repository }}/helm
           username: ${{ github.actor }}
           access-token: ${{ secrets.GITHUB_TOKEN }}
-          chart-folder: ${{ inputs.chart-folder }}
+          chart-folder: ${{ matrix.chart-folder }}
           update-dependencies: true
           force: true
