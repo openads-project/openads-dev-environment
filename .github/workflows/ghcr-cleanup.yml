@@ -17,14 +17,24 @@ jobs:
         id: package
         shell: bash
         run: |
-          helm_packages=
+          repository_name='${{ github.event.repository.name }}'
+          echo "helm_chart_name=${repository_name//_/-}" >> "$GITHUB_OUTPUT"
+          launch_suffixes=
           while IFS= read -r chart_file; do
-            chart_name=$(sed -nE 's/^name:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${chart_file}")
-            [[ -n "${chart_name}" ]] || continue
-            helm_package="${{ github.event.repository.name }}/helm/${chart_name}"
-            helm_packages="${helm_packages:+${helm_packages},}${helm_package}"
-          done < <(find deployment/helm -mindepth 1 -maxdepth 2 -type f -name Chart.yaml 2>/dev/null | sort)
-          echo "helm_packages=${helm_packages}" >> "$GITHUB_OUTPUT"
+            chart_version=$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${chart_file}")
+            app_version=$(sed -nE 's/^appVersion:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${chart_file}")
+            if [[ "${chart_version}" == "${app_version}-"* ]]; then
+              launch_suffix=${chart_version#"${app_version}-"}
+              launch_suffix=${launch_suffix//./\\.}
+              launch_suffixes="${launch_suffixes:+${launch_suffixes}|}${launch_suffix}"
+            fi
+          done < <(find deployment/helm -mindepth 2 -maxdepth 2 -type f -name Chart.yaml 2>/dev/null | sort)
+          if [[ -n "${launch_suffixes}" ]]; then
+            helm_exclude_tags="^[0-9]+\\.[0-9]+\\.[0-9]+(-(${launch_suffixes}))?(-main)?$"
+          else
+            helm_exclude_tags='^[0-9]+\.[0-9]+\.[0-9]+(-main)?$'
+          fi
+          echo "helm_exclude_tags=${helm_exclude_tags}" >> "$GITHUB_OUTPUT"
       - name: Cleanup ${{ github.repository }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
@@ -55,16 +65,15 @@ jobs:
           delete-partial-images: true
           delete-orphaned-images: true
           validate: true
-      - name: Cleanup Helm charts
-        if: ${{ steps.package.outputs.helm_packages != '' }}
+      - name: Cleanup ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
-          packages: ${{ steps.package.outputs.helm_packages }}
+          packages: ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
           dry-run: false
           use-regex: true
           skip-regex-checks: true
           older-than: 1 month
-          exclude-tags: '^[0-9]+\.[0-9]+\.[0-9]+(-main)?$' # 1.2.3, 1.2.3-main
+          exclude-tags: ${{ steps.package.outputs.helm_exclude_tags }} # 1.2.3, 1.2.3-<launch>, *-main
           delete-tags: ".*"
           delete-untagged: true
           delete-ghost-images: true

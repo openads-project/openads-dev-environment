@@ -180,7 +180,7 @@ Use [`generate_helm.py`](scripts/generate_helm.py) to generate `helm/Chart.yaml`
 .openads-dev-environment/scripts/generate_helm.py --check
 ```
 
-A single launch deployment keeps the existing `deployment/helm/Chart.yaml` and `deployment/helm/values.yaml` paths and chart name. Multiple directly launching files generate one chart below `deployment/helm/<name>/` per launch file. Multi-launch chart names append the launch name with underscores converted to hyphens, while chart versions remain unchanged. The Helm OCI workflows discover, package, publish, and clean up all generated charts.
+A single launch deployment keeps the existing `deployment/helm/Chart.yaml` and `deployment/helm/values.yaml` paths, chart name, and version. Multiple directly launching files generate one chart below `deployment/helm/<name>/` per launch file. All charts use the same package-derived chart name and therefore share one OCI repository. Multi-launch chart versions append the launch name with underscores converted to hyphens, for example `1.0.0-first-node`; branch builds append the Git ref afterwards. The Helm OCI workflows discover, package, publish, and clean up all generated charts.
 
 ### Consistency Checker
 

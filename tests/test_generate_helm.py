@@ -136,8 +136,12 @@ def test_generate_helm_creates_launch_specific_charts(tmp_path: Path) -> None:
     second_chart = (helm_dir / "second_node" / "Chart.yaml").read_text(encoding="utf-8")
     second_values = (helm_dir / "second_node" / "values.yaml").read_text(encoding="utf-8")
 
-    assert "name: sample-pkg-multi-launch-first-node\n" in first_chart
-    assert "name: sample-pkg-multi-launch-second-node\n" in second_chart
+    assert "name: sample-pkg-multi-launch\n" in first_chart
+    assert "name: sample-pkg-multi-launch\n" in second_chart
+    assert "version: 1.0.0-first-node\n" in first_chart
+    assert "version: 1.0.0-second-node\n" in second_chart
+    assert "appVersion: 1.0.0\n" in first_chart
+    assert "appVersion: 1.0.0\n" in second_chart
     assert "NAME: first_node\n" in first_values
     assert "config/params.first_node.yml\n" in first_values
     assert "ros2 launch sample_pkg_multi_launch first_node.launch.py" in first_values
@@ -211,5 +215,8 @@ def test_helm_oci_workflows_discover_and_publish_multiple_charts() -> None:
     assert "helm package" in gitlab_ci
     assert "helm push" in gitlab_ci
 
-    assert "helm_packages=" in cleanup_workflow
-    assert "packages: ${{ steps.package.outputs.helm_packages }}" in cleanup_workflow
+    assert "helm_chart_name=" in cleanup_workflow
+    assert "packages: ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}" in cleanup_workflow
+    assert "helm_exclude_tags=" in cleanup_workflow
+    assert "exclude-tags: ${{ steps.package.outputs.helm_exclude_tags }}" in cleanup_workflow
+    assert "helm_packages=" not in cleanup_workflow
