@@ -28,24 +28,19 @@ compose-oci:
       exists:
         - deployment/compose/docker-compose*.yml
   variables:
-    COMPOSE_FILE: deployment/compose/docker-compose.yml
+    COMPOSE_FOLDER: deployment/compose
     COMPOSE_IMAGE_NAME: $CI_REGISTRY_IMAGE/compose
   script:
     - |
-      if [ -f "$COMPOSE_FILE" ]; then
-        COMPOSE_FILES=$COMPOSE_FILE
-      else
-        test "$COMPOSE_FILE" = deployment/compose/docker-compose.yml
-        COMPOSE_FILES=$(find deployment/compose -maxdepth 1 -type f -name 'docker-compose.*.yml' | sort)
-        test -n "$COMPOSE_FILES"
-      fi
+      COMPOSE_FILES=$(find "$COMPOSE_FOLDER" -maxdepth 1 -type f -name 'docker-compose*.yml' | sort)
+      test -n "$COMPOSE_FILES"
     - COMPOSE_IMAGE_TAG="${CI_COMMIT_TAG:-$CI_COMMIT_REF_SLUG}"
     - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
     - |
       for compose_file in $COMPOSE_FILES; do
         artifact_tag=$COMPOSE_IMAGE_TAG
-        if [ "$compose_file" != "$COMPOSE_FILE" ]; then
-          filename=${compose_file##*/}
+        filename=${compose_file##*/}
+        if [ "$filename" != docker-compose.yml ]; then
           suffix=${filename#docker-compose.}
           suffix=${suffix%.yml}
           artifact_tag="$COMPOSE_IMAGE_TAG-$suffix"
