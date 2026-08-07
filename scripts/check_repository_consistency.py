@@ -2088,7 +2088,7 @@ def check_compose_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
 
 
 def check_helm_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
-    """Check that the committed Helm chart matches generator output."""
+    """Check that the committed Helm charts match generator output."""
     generator_script = ctx.repo_root / ".openads-dev-environment" / "scripts" / "generate_helm.py"
     if not generator_script.exists():
         return CheckResult(
@@ -2113,7 +2113,7 @@ def check_helm_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
             check_id="helm_generator_is_idempotent",
             name="Helm chart generator output is up to date",
             passed=False,
-            message="Helm chart is not generated from the current launch metadata",
+            message="Helm charts are not generated from the current launch metadata",
             details=details,
         )
 
@@ -2121,7 +2121,7 @@ def check_helm_generator_is_idempotent(ctx: CheckContext) -> CheckResult:
         check_id="helm_generator_is_idempotent",
         name="Helm chart generator output is up to date",
         passed=True,
-        message="Helm chart matches generator output",
+        message="Helm charts match generator output",
         details=[],
     )
 

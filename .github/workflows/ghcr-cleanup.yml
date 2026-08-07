@@ -8,14 +8,33 @@ jobs:
   ghcr-cleanup:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
       - name: Determine package names
         id: package
         shell: bash
         run: |
           repository_name='${{ github.event.repository.name }}'
           echo "helm_chart_name=${repository_name//_/-}" >> "$GITHUB_OUTPUT"
+          launch_suffixes=
+          while IFS= read -r chart_file; do
+            chart_version=$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${chart_file}")
+            app_version=$(sed -nE 's/^appVersion:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${chart_file}")
+            if [[ "${chart_version}" == "${app_version}-"* ]]; then
+              launch_suffix=${chart_version#"${app_version}-"}
+              launch_suffix=${launch_suffix//./\\.}
+              launch_suffixes="${launch_suffixes:+${launch_suffixes}|}${launch_suffix}"
+            fi
+          done < <(find deployment/helm -mindepth 2 -maxdepth 2 -type f -name Chart.yaml 2>/dev/null | sort)
+          if [[ -n "${launch_suffixes}" ]]; then
+            helm_exclude_tags="^[0-9]+\\.[0-9]+\\.[0-9]+(-(${launch_suffixes}))?(-main)?$"
+          else
+            helm_exclude_tags='^[0-9]+\.[0-9]+\.[0-9]+(-main)?$'
+          fi
+          echo "helm_exclude_tags=${helm_exclude_tags}" >> "$GITHUB_OUTPUT"
       - name: Cleanup ${{ github.repository }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
@@ -54,7 +73,7 @@ jobs:
           use-regex: true
           skip-regex-checks: true
           older-than: 1 month
-          exclude-tags: '^[0-9]+\.[0-9]+\.[0-9]+(-main)?$' # 1.2.3, 1.2.3-main
+          exclude-tags: ${{ steps.package.outputs.helm_exclude_tags }} # 1.2.3, 1.2.3-<launch>, *-main
           delete-tags: ".*"
           delete-untagged: true
           delete-ghost-images: true

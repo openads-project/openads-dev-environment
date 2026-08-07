@@ -26,15 +26,27 @@ compose-oci:
   rules:
     - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
       exists:
-        - deployment/compose/docker-compose.yml
+        - deployment/compose/docker-compose*.yml
   variables:
-    COMPOSE_FILE: deployment/compose/docker-compose.yml
+    COMPOSE_FOLDER: deployment/compose
     COMPOSE_IMAGE_NAME: $CI_REGISTRY_IMAGE/compose
   script:
-    - test -f "$COMPOSE_FILE"
+    - |
+      COMPOSE_FILES=$(find "$COMPOSE_FOLDER" -maxdepth 1 -type f -name 'docker-compose*.yml' | sort)
+      test -n "$COMPOSE_FILES"
     - COMPOSE_IMAGE_TAG="${CI_COMMIT_TAG:-$CI_COMMIT_REF_SLUG}"
     - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
-    - docker compose -f "$COMPOSE_FILE" publish --yes "$COMPOSE_IMAGE_NAME:$COMPOSE_IMAGE_TAG"
+    - |
+      for compose_file in $COMPOSE_FILES; do
+        artifact_tag=$COMPOSE_IMAGE_TAG
+        filename=${compose_file##*/}
+        if [ "$filename" != docker-compose.yml ]; then
+          suffix=${filename#docker-compose.}
+          suffix=${suffix%.yml}
+          artifact_tag="$COMPOSE_IMAGE_TAG-$suffix"
+        fi
+        docker compose -f "$compose_file" publish --yes "$COMPOSE_IMAGE_NAME:$artifact_tag"
+      done
 
 helm-oci:
   stage: helm-oci
@@ -45,30 +57,43 @@ helm-oci:
     - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
       exists:
         - deployment/helm/Chart.yaml
+        - deployment/helm/*/Chart.yaml
   variables:
     CHART_FOLDER: deployment/helm
     HELM_OCI_REGISTRY: $CI_REGISTRY_IMAGE/helm
   before_script:
     - echo "$CI_REGISTRY_PASSWORD" | helm registry login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
   script:
-    - test -f "$CHART_FOLDER/Chart.yaml"
     - |
-      if [ -z "$CI_COMMIT_TAG" ]; then
-        chart_file="$CHART_FOLDER/Chart.yaml"
-        base_version=$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p' "$chart_file")
-        ref_name=${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-$CI_COMMIT_REF_NAME}
-        ref_slug=$(echo "$ref_name" | sed -E 's/[^a-zA-Z0-9-]+/-/g; s/^-+//; s/-+$//')
-        if [ -z "$base_version" ] || [ -z "$ref_slug" ]; then
-          echo "Could not determine a valid chart version or Git ref slug" >&2
-          exit 1
-        fi
-        chart_version="$base_version-$ref_slug"
-        sed -i -E "s/^version:.*$/version: $chart_version/" "$chart_file"
-        echo "Publishing chart version $chart_version"
+      if [ -f "$CHART_FOLDER/Chart.yaml" ]; then
+        CHART_FOLDERS=$CHART_FOLDER
+      else
+        test "$CHART_FOLDER" = deployment/helm
+        CHART_FOLDERS=$(find deployment/helm -mindepth 2 -maxdepth 2 -type f -name Chart.yaml | sed 's#/Chart.yaml$##' | sort)
+        test -n "$CHART_FOLDERS"
       fi
-    - helm dependency update "$CHART_FOLDER"
-    - helm package "$CHART_FOLDER" --destination .
-    - helm push *.tgz "oci://$HELM_OCI_REGISTRY"
+    - |
+      for chart_folder in $CHART_FOLDERS; do
+        if [ -z "$CI_COMMIT_TAG" ]; then
+          chart_file="$chart_folder/Chart.yaml"
+          base_version=$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p' "$chart_file")
+          ref_name=${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-$CI_COMMIT_REF_NAME}
+          ref_slug=$(echo "$ref_name" | sed -E 's/[^a-zA-Z0-9-]+/-/g; s/^-+//; s/-+$//')
+          if [ -z "$base_version" ] || [ -z "$ref_slug" ]; then
+            echo "Could not determine a valid chart version or Git ref slug" >&2
+            exit 1
+          fi
+          chart_version="$base_version-$ref_slug"
+          sed -i -E "s/^version:.*$/version: $chart_version/" "$chart_file"
+          echo "Publishing chart version $chart_version"
+        fi
+        helm dependency update "$chart_folder"
+        helm package "$chart_folder" --destination .
+      done
+    - |
+      for chart_package in ./*.tgz; do
+        helm push "$chart_package" "oci://$HELM_OCI_REGISTRY"
+      done
 
 consistency:
   stage: consistency

@@ -1,0 +1,30 @@
+services:
+
+  sample-pkg-multi-launch:
+    image: ghcr.io/openads-project/sample_pkg_multi_launch:v1.0.0
+    environment:
+      # --- name ------
+      NAMESPACE: /
+      NAME: first_node
+      # --- inputs ----
+      INPUT_TOPIC: ~/input
+      # --- outputs ---
+      OUTPUT_TOPIC: ~/output
+      # --- other -----
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      USE_SIM_TIME: ${USE_SIM_TIME:-false}
+      PARAMS: ${PARAMS:-/docker-ros/ws/install/sample_pkg_multi_launch/share/sample_pkg_multi_launch/config/params.first_node.yml}
+    command:
+      - /bin/bash
+      - -ic
+      - |
+        ros2 launch sample_pkg_multi_launch first_node.launch.py \
+          namespace:=$${NAMESPACE} \
+          name:=$${NAME} \
+          log_level:=$${LOG_LEVEL} \
+          use_sim_time:=$${USE_SIM_TIME} \
+          params:=$${PARAMS} \
+          input_topic:=$${INPUT_TOPIC} \
+          output_topic:=$${OUTPUT_TOPIC}
+    # volumes:
+    #   - ./params.yml:/docker-ros/ws/install/sample_pkg_multi_launch/share/sample_pkg_multi_launch/config/params.first_node.yml

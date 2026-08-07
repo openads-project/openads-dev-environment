@@ -3,7 +3,7 @@
 # Copyright Institute for Automotive Engineering (ika), RWTH Aachen University
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generate the template Docker Compose file from the default ROS 2 launch file."""
+"""Generate template Docker Compose files from ROS 2 launch files."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ except ModuleNotFoundError as exc:
 
 
 DEFAULT_NAMESPACE = "/"
+COMPOSE_DIR = Path("deployment/compose")
 COMPOSE_PATH = Path("deployment/compose/docker-compose.yml")
 GITLAB_REGISTRY_ENV_NAME = "OPENADS_GITLAB_REGISTRY"
 STANDARD_LAUNCH_ARGUMENT_NAMES = ("namespace", "name", "log_level", "use_sim_time", "params")
@@ -40,6 +41,7 @@ class LaunchArgument:
     name: str
     default_value: str
     description: str
+    installed_default_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,39 @@ def call_keyword(call: ast.Call, keyword_name: str) -> ast.AST | None:
     return None
 
 
+def installed_share_path(node: ast.AST | None) -> str | None:
+    """Resolve os.path.join(get_package_share_directory(...), ...) defaults."""
+    if not isinstance(node, ast.Call) or call_name(node.func) != "join" or len(node.args) < 2:
+        return None
+    if not isinstance(node.func, ast.Attribute) or not isinstance(node.func.value, ast.Attribute):
+        return None
+    if (
+        node.func.value.attr != "path"
+        or not isinstance(node.func.value.value, ast.Name)
+        or node.func.value.value.id != "os"
+    ):
+        return None
+
+    package_share_call = node.args[0]
+    if (
+        not isinstance(package_share_call, ast.Call)
+        or call_name(package_share_call.func) != "get_package_share_directory"
+        or len(package_share_call.args) != 1
+    ):
+        return None
+
+    package_name = constant_string(package_share_call.args[0])
+    relative_parts = [constant_string(part) for part in node.args[1:]]
+    if package_name is None or any(part is None for part in relative_parts):
+        return None
+
+    installed_path = Path("/docker-ros/ws/install") / package_name / "share" / package_name
+    for part in relative_parts:
+        if part is not None:
+            installed_path /= part
+    return str(installed_path)
+
+
 def launch_argument_from_call(call: ast.Call) -> LaunchArgument | None:
     if call_name(call.func) != "DeclareLaunchArgument":
         return None
@@ -107,12 +142,18 @@ def launch_argument_from_call(call: ast.Call) -> LaunchArgument | None:
     if name is None:
         return None
 
-    default_value = constant_string(call_keyword(call, "default_value"))
+    default_node = call_keyword(call, "default_value")
+    default_value = constant_string(default_node)
     description = constant_string(call_keyword(call, "description")) or ""
     if default_value is None:
         default_value = ""
 
-    return LaunchArgument(name=name, default_value=default_value, description=description)
+    return LaunchArgument(
+        name=name,
+        default_value=default_value,
+        description=description,
+        installed_default_path=installed_share_path(default_node),
+    )
 
 
 def extract_remappable_topic_names(tree: ast.AST) -> list[str]:
@@ -227,6 +268,73 @@ def find_default_launch_file(repo_root: Path, package_name: str) -> Path:
     if details:
         message = f"{message}\n{details}"
     raise FileNotFoundError(message)
+
+
+def find_compose_launch_files(repo_root: Path, package_name: str) -> list[Path]:
+    """Find launch files to deploy while preserving the package-default convention."""
+    launch_dir = repo_root / package_name / "launch"
+    if not launch_dir.is_dir():
+        raise FileNotFoundError(f"default launch directory not found: {launch_dir}")
+
+    preferred_launch_file = launch_dir / f"{package_name}_launch.py"
+    matching_launch_files: list[Path] = []
+    parsed_launch_files: list[tuple[Path, frozenset[str]]] = []
+    errors: list[str] = []
+    for launch_file in candidate_launch_files(launch_dir, package_name):
+        try:
+            launch_data = parse_launch_file(launch_file)
+        except Exception as exc:
+            errors.append(f"{launch_file}: {exc}")
+            continue
+        parsed_launch_files.append((launch_file, launch_data.node_packages))
+        if package_name in launch_data.node_packages:
+            matching_launch_files.append(launch_file)
+
+    if preferred_launch_file in matching_launch_files:
+        return [preferred_launch_file]
+    if matching_launch_files:
+        return matching_launch_files
+    if len(parsed_launch_files) == 1:
+        return [parsed_launch_files[0][0]]
+
+    details = "\n".join(errors)
+    message = f"default launch file for package {package_name!r} not found in {launch_dir}"
+    if parsed_launch_files:
+        launch_files = ", ".join(
+            f"{path} (launches packages: {', '.join(sorted(node_packages))})"
+            for path, node_packages in parsed_launch_files
+        )
+        message = f"{message}\nparseable launch files: {launch_files}"
+    if details:
+        message = f"{message}\n{details}"
+    raise FileNotFoundError(message)
+
+
+def launch_file_stem(launch_file: Path) -> str:
+    for suffix in ("_launch.py", ".launch.py"):
+        if launch_file.name.endswith(suffix):
+            stem = launch_file.name[: -len(suffix)]
+            if stem:
+                return stem
+    raise ValueError(f"unsupported launch file name: {launch_file.name}")
+
+
+def compose_paths_for_launch_files(launch_files: list[Path]) -> dict[Path, Path]:
+    if len(launch_files) == 1:
+        return {launch_files[0]: COMPOSE_PATH}
+
+    compose_paths: dict[Path, Path] = {}
+    used_stems: dict[str, Path] = {}
+    for launch_file in launch_files:
+        stem = launch_file_stem(launch_file)
+        previous = used_stems.get(stem)
+        if previous is not None:
+            raise ValueError(
+                f"launch file name collision after removing the launch suffix: {previous.name}, {launch_file.name}"
+            )
+        used_stems[stem] = launch_file
+        compose_paths[launch_file] = COMPOSE_DIR / f"docker-compose.{stem}.yml"
+    return compose_paths
 
 
 def parse_package_metadata(package_xml: Path) -> PackageMetadata:
@@ -359,16 +467,21 @@ def image_repository_from_reference(image_reference: str) -> str:
 
 
 def container_image_repository_from_existing_compose(repo_root: Path, package_name: str) -> str | None:
-    compose_path = repo_root / COMPOSE_PATH
-    if not compose_path.is_file():
-        return None
-    for line in compose_path.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"\s*image:\s*(\S+)", line)
-        if not match:
+    compose_dir = repo_root / COMPOSE_DIR
+    compose_paths = [repo_root / COMPOSE_PATH]
+    if compose_dir.is_dir():
+        compose_paths.extend(sorted(compose_dir.glob("docker-compose.*.yml")))
+
+    for compose_path in dict.fromkeys(compose_paths):
+        if not compose_path.is_file():
             continue
-        image_repository = image_repository_from_reference(match.group(1))
-        if image_repository.split("/")[-1] == package_name:
-            return image_repository
+        for line in compose_path.read_text(encoding="utf-8").splitlines():
+            match = re.match(r"\s*image:\s*(\S+)", line)
+            if not match:
+                continue
+            image_repository = image_repository_from_reference(match.group(1))
+            if image_repository.split("/")[-1] == package_name:
+                return image_repository
     return None
 
 
@@ -523,19 +636,34 @@ def installed_params_path(package_name: str) -> str:
     return f"/docker-ros/ws/install/{package_name}/share/{package_name}/config/params.yml"
 
 
-def build_compose(repo_root: Path, gitlab_registry: str | None = None) -> str:
-    package_metadata = find_default_package_metadata(repo_root)
-    launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name))
-
-    image_repository = container_image_repository(repo_root, package_metadata.name, gitlab_registry)
+def render_compose(
+    repo_root: Path,
+    package_metadata: PackageMetadata,
+    launch_data: LaunchData,
+    image_repository: str,
+    *,
+    multi_launch: bool,
+) -> str:
     arguments = sorted_launch_arguments(launch_data)
     input_variables, output_variables, other_topic_variables = topic_environment_variables(
         launch_data, repo_root / package_metadata.name / "README.md"
     )
     log_level = arguments.get("log_level", LaunchArgument("log_level", "info", "")).default_value or "info"
     use_sim_time = arguments.get("use_sim_time", LaunchArgument("use_sim_time", "false", "")).default_value or "false"
-    node_name = package_metadata.name
-    params_default_path = installed_params_path(package_metadata.name) if "params" in arguments else None
+    if multi_launch:
+        node_name = arguments.get("name", LaunchArgument("name", package_metadata.name, "")).default_value
+        node_name = node_name or package_metadata.name
+        params_argument = arguments.get("params")
+        params_default_path = None
+        if params_argument is not None:
+            params_default_path = params_argument.installed_default_path or params_argument.default_value or None
+    else:
+        node_name = package_metadata.name
+        params_default_path = installed_params_path(package_metadata.name) if "params" in arguments else None
+
+    launch_argument_names = command_argument_names(launch_data)
+    if multi_launch and "params" in launch_argument_names and params_default_path is None:
+        launch_argument_names.remove("params")
 
     context = {
         "service_name": compose_service_name(package_metadata.name),
@@ -558,11 +686,44 @@ def build_compose(repo_root: Path, gitlab_registry: str | None = None) -> str:
                 only_if_set=arguments[argument_name].default_value == ""
                 and argument_name not in STANDARD_LAUNCH_ARGUMENT_NAMES,
             )
-            for argument_name in command_argument_names(launch_data)
+            for argument_name in launch_argument_names
         ],
         "package_name": package_metadata.name,
     }
     return render_template(build_template_environment(), "docker_compose.yml.j2", context)
+
+
+def build_compose(repo_root: Path, gitlab_registry: str | None = None) -> str:
+    """Build the legacy single Compose output used by the Helm generator and callers."""
+    package_metadata = find_default_package_metadata(repo_root)
+    launch_data = parse_launch_file(find_default_launch_file(repo_root, package_metadata.name))
+    image_repository = container_image_repository(repo_root, package_metadata.name, gitlab_registry)
+    return render_compose(
+        repo_root,
+        package_metadata,
+        launch_data,
+        image_repository,
+        multi_launch=False,
+    )
+
+
+def build_composes(repo_root: Path, gitlab_registry: str | None = None) -> dict[Path, str]:
+    package_metadata = find_default_package_metadata(repo_root)
+    launch_files = find_compose_launch_files(repo_root, package_metadata.name)
+    compose_paths = compose_paths_for_launch_files(launch_files)
+    multi_launch = len(launch_files) > 1
+    image_repository = container_image_repository(repo_root, package_metadata.name, gitlab_registry)
+
+    return {
+        compose_paths[launch_file]: render_compose(
+            repo_root,
+            package_metadata,
+            parse_launch_file(launch_file),
+            image_repository,
+            multi_launch=multi_launch,
+        )
+        for launch_file in launch_files
+    }
 
 
 def build_diff(expected: str, current: str, compose_path: Path, repo_root: Path) -> str:
@@ -602,8 +763,16 @@ def resolve_repo_root(raw_repo_root: str | None) -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def managed_compose_paths(repo_root: Path) -> set[Path]:
+    compose_dir = repo_root / COMPOSE_DIR
+    paths = {repo_root / COMPOSE_PATH} if (repo_root / COMPOSE_PATH).is_file() else set()
+    if compose_dir.is_dir():
+        paths.update(path for path in compose_dir.glob("docker-compose.*.yml") if path.is_file())
+    return paths
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Generate docker-compose.yml from the default launch file")
+    parser = argparse.ArgumentParser(description="Generate Docker Compose files from ROS 2 launch files")
     parser.add_argument("repo_root", nargs="?", help="Repository root (defaults to inferred top-level)")
     parser.add_argument("--check", action="store_true", help="Check whether docker compose output is up to date")
     parser.add_argument(
@@ -621,30 +790,51 @@ def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
     repo_root = resolve_repo_root(args.repo_root)
-    compose_path = repo_root / COMPOSE_PATH
 
     try:
-        expected = build_compose(repo_root, gitlab_registry=args.gitlab_registry)
+        expected_files = build_composes(repo_root, gitlab_registry=args.gitlab_registry)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    expected_paths = {repo_root / relative_path for relative_path in expected_files}
+    obsolete_paths = managed_compose_paths(repo_root) - expected_paths
+
     if args.check:
-        current = compose_path.read_text(encoding="utf-8") if compose_path.exists() else ""
-        if current != expected:
+        stale = False
+        for relative_path, expected in sorted(expected_files.items()):
+            compose_path = repo_root / relative_path
+            current = compose_path.read_text(encoding="utf-8") if compose_path.exists() else ""
+            if current == expected:
+                continue
+            stale = True
             diff = build_diff(expected, current, compose_path, repo_root)
             if diff:
                 print(diff, end="" if diff.endswith("\n") else "\n")
             else:
-                print(f"{COMPOSE_PATH} is stale", file=sys.stderr)
-            return 1
-        return 0
+                print(f"{relative_path} is stale", file=sys.stderr)
+        for compose_path in sorted(obsolete_paths):
+            stale = True
+            current = compose_path.read_text(encoding="utf-8")
+            diff = build_diff("", current, compose_path, repo_root)
+            if diff:
+                print(diff, end="" if diff.endswith("\n") else "\n")
+            else:
+                print(f"{compose_path.relative_to(repo_root)} is obsolete", file=sys.stderr)
+        return 1 if stale else 0
 
-    compose_path.parent.mkdir(parents=True, exist_ok=True)
-    current = compose_path.read_text(encoding="utf-8") if compose_path.exists() else ""
-    compose_path.write_text(expected, encoding="utf-8")
-    print(f"Updated {compose_path}")
-    print_diff(current, expected, compose_path, repo_root)
+    for relative_path, expected in sorted(expected_files.items()):
+        compose_path = repo_root / relative_path
+        compose_path.parent.mkdir(parents=True, exist_ok=True)
+        current = compose_path.read_text(encoding="utf-8") if compose_path.exists() else ""
+        compose_path.write_text(expected, encoding="utf-8")
+        print(f"Updated {compose_path}")
+        print_diff(current, expected, compose_path, repo_root)
+    for compose_path in sorted(obsolete_paths):
+        current = compose_path.read_text(encoding="utf-8")
+        compose_path.unlink()
+        print(f"Removed obsolete {compose_path}")
+        print_diff(current, "", compose_path, repo_root)
     return 0
 
 

@@ -1,0 +1,26 @@
+services:
+
+  sample-pkg-multi-launch:
+    image: ghcr.io/openads-project/sample_pkg_multi_launch:v1.0.0
+    environment:
+      # --- name ------
+      NAMESPACE: /
+      NAME: second_node
+      # --- inputs ----
+      INPUT_TOPIC: ~/input
+      # --- outputs ---
+      OUTPUT_TOPIC: ~/output
+      # --- other -----
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      USE_SIM_TIME: ${USE_SIM_TIME:-false}
+    command:
+      - /bin/bash
+      - -ic
+      - |
+        ros2 launch sample_pkg_multi_launch second_node_launch.py \
+          namespace:=$${NAMESPACE} \
+          name:=$${NAME} \
+          log_level:=$${LOG_LEVEL} \
+          use_sim_time:=$${USE_SIM_TIME} \
+          input_topic:=$${INPUT_TOPIC} \
+          output_topic:=$${OUTPUT_TOPIC}
