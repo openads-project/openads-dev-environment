@@ -87,7 +87,7 @@ description: Helm chart for sample_pkg
 dependencies:
   - repository: oci://ghcr.io/openads-project/openads-helm
     name: openadservice
-    version: 1.0.0
+    version: 1.1.0
 """
     assert (repo_root / VALUES_PATH).read_text(encoding="utf-8") == """\
 openadservice:
