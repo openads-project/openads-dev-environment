@@ -66,6 +66,7 @@ RE_KEYWORD_DEFAULT_VALUE = re.compile(
     r"default_value\s*=\s*([rRuUbB]?(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"))"
 )
 RE_LAUNCH_EXECUTABLE = re.compile(r"""executable\s*=\s*["']([^"']+)["']""")
+SPECIAL_TOPICS = {"/tf", "/tf_static", "/diagnostics"}
 
 ANSI_RESET = "\033[0m"
 ANSI_GREEN = "\033[32m"
@@ -1196,6 +1197,10 @@ def collect_declared_comm_names_from_source_files(source_files: list[Path]) -> s
     return declared_topics
 
 
+def is_allowed_special_ros_topic(topic_name: str) -> bool:
+    return topic_name in SPECIAL_TOPICS
+
+
 def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
     failing_calls: list[str] = []
     cpp_call_specs = {
@@ -1230,11 +1235,12 @@ def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
                         continue
 
                     topic_name = unquote_string_literal(topic_arg)
-                    if not topic_name.startswith("~/"):
-                        line = text.count("\n", 0, call_idx) + 1
-                        failing_calls.append(
-                            f"{path.relative_to(ctx.repo_root)}:{line} {call_name} topic '{topic_name}'"
-                        )
+                    if is_allowed_special_ros_topic(topic_name) or topic_name.startswith("~/"):
+                        continue
+                    line = text.count("\n", 0, call_idx) + 1
+                    failing_calls.append(
+                        f"{path.relative_to(ctx.repo_root)}:{line} {call_name} topic '{topic_name}'"
+                    )
 
         for path in py_files:
             text = read_text(path)
@@ -1251,11 +1257,12 @@ def check_ros_pubsub_topics_private_namespace(ctx: CheckContext) -> CheckResult:
                         continue
 
                     topic_name = unquote_string_literal(topic_arg)
-                    if not topic_name.startswith("~/"):
-                        line = text.count("\n", 0, call_idx) + 1
-                        failing_calls.append(
-                            f"{path.relative_to(ctx.repo_root)}:{line} {call_name} topic '{topic_name}'"
-                        )
+                    if is_allowed_special_ros_topic(topic_name) or topic_name.startswith("~/"):
+                        continue
+                    line = text.count("\n", 0, call_idx) + 1
+                    failing_calls.append(
+                        f"{path.relative_to(ctx.repo_root)}:{line} {call_name} topic '{topic_name}'"
+                    )
 
     if failing_calls:
         return CheckResult(
