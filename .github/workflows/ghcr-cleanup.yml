@@ -2,7 +2,17 @@ name: ghcr-cleanup
 
 on:
   workflow_call:
-    inputs: {}
+    inputs:
+      cleanup-compose:
+        description: Clean ${{ github.repository }}/compose
+        required: false
+        type: boolean
+        default: true
+      cleanup-helm:
+        description: Clean ${{ github.repository }}/helm
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   ghcr-cleanup:
@@ -51,6 +61,7 @@ jobs:
           delete-orphaned-images: true
           validate: true
       - name: Cleanup ${{ github.repository }}/compose
+        if: ${{ inputs['cleanup-compose'] }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
           packages: ${{ github.event.repository.name }}/compose
@@ -66,6 +77,7 @@ jobs:
           delete-orphaned-images: true
           validate: true
       - name: Cleanup ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
+        if: ${{ inputs['cleanup-helm'] }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
           packages: ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
