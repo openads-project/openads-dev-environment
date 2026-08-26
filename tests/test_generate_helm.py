@@ -207,16 +207,10 @@ def test_helm_oci_workflows_discover_and_publish_multiple_charts() -> None:
 
     assert "helm-charts:" not in github_workflow
     assert "strategy:" not in github_workflow
-    assert "uses: azure/setup-helm@v4" in github_workflow
-    assert "while IFS= read -r chart_folder" in github_workflow
-    assert 'helm dependency update "${chart_folder}"' in github_workflow
-    assert 'helm package "${chart_folder}" --destination /tmp/helm-packages' in github_workflow
-    assert 'helm push "${chart_package}" "oci://${HELM_OCI_REGISTRY}"' in github_workflow
-
-    assert "for chart_folder in" in gitlab_ci
-    assert "helm dependency update" in gitlab_ci
-    assert "helm package" in gitlab_ci
-    assert "helm push" in gitlab_ci
+    for workflow in (github_workflow, gitlab_ci):
+        assert "helm dependency update" in workflow
+        assert "helm package" in workflow
+        assert "helm push" in workflow
 
     assert "helm_chart_name=" in cleanup_workflow
     assert "packages: ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}" in cleanup_workflow

@@ -57,10 +57,14 @@ jobs:
               echo "Publishing chart version ${chart_version}"
             fi
             helm dependency update "${chart_folder}"
-            chart_package=$(helm package "${chart_folder}" --destination /tmp/helm-packages | sed -n 's/^Successfully packaged chart and saved it to //p')
-            if [[ -z "${chart_package}" || ! -f "${chart_package}" ]]; then
-              echo "Could not determine packaged Helm chart for ${chart_folder}" >&2
-              exit 1
-            fi
-            helm push "${chart_package}" "oci://${HELM_OCI_REGISTRY}"
+            helm package "${chart_folder}" --destination /tmp/helm-packages
           done <<< "${chart_folders}"
+          shopt -s nullglob
+          chart_packages=(/tmp/helm-packages/*.tgz)
+          if (( ${#chart_packages[@]} == 0 )); then
+            echo "No Helm chart packages were created" >&2
+            exit 1
+          fi
+          for chart_package in "${chart_packages[@]}"; do
+            helm push "${chart_package}" "oci://${HELM_OCI_REGISTRY}"
+          done
