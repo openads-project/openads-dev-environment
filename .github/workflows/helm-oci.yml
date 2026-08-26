@@ -42,6 +42,7 @@ jobs:
             exit 1
           fi
           printf '%s' "${HELM_REGISTRY_PASSWORD}" | helm registry login ghcr.io --username "${HELM_REGISTRY_USERNAME}" --password-stdin
+          HELM_OCI_REGISTRY="${HELM_OCI_REGISTRY,,}"
           mkdir -p /tmp/helm-packages
           while IFS= read -r chart_folder; do
             if [[ "${IS_TAG}" != "true" ]]; then
