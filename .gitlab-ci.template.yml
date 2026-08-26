@@ -45,7 +45,7 @@ compose-oci:
           suffix=${suffix%.yml}
           artifact_tag="$COMPOSE_IMAGE_TAG-$suffix"
         fi
-        docker compose -f "$compose_file" publish --yes "$COMPOSE_IMAGE_NAME:$artifact_tag"
+        docker compose -f "$compose_file" publish --with-env --yes "$COMPOSE_IMAGE_NAME:$artifact_tag"
       done
 
 helm-oci:

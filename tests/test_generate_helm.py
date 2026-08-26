@@ -205,10 +205,13 @@ def test_helm_oci_workflows_discover_and_publish_multiple_charts() -> None:
     for workflow in (github_workflow, gitlab_ci):
         assert "find deployment/helm -mindepth 2 -maxdepth 2 -type f -name Chart.yaml" in workflow
 
-    assert "chart-folder: ${{ fromJSON(needs.helm-charts.outputs.chart-folders) }}" in github_workflow
-    assert "chart-folder: ${{ matrix.chart-folder }}" in github_workflow
-    assert "uses: bsord/helm-push@" in github_workflow
-    assert "force: true" in github_workflow
+    assert "helm-charts:" not in github_workflow
+    assert "strategy:" not in github_workflow
+    assert "uses: azure/setup-helm@v4" in github_workflow
+    assert "while IFS= read -r chart_folder" in github_workflow
+    assert 'helm dependency update "${chart_folder}"' in github_workflow
+    assert 'helm package "${chart_folder}" --destination /tmp/helm-packages' in github_workflow
+    assert 'helm push "${chart_package}" "oci://${HELM_OCI_REGISTRY}"' in github_workflow
 
     assert "for chart_folder in" in gitlab_ci
     assert "helm dependency update" in gitlab_ci
