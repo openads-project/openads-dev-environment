@@ -10,71 +10,62 @@ on:
         default: deployment/helm
 
 jobs:
-  helm-charts:
+  helm-oci:
     runs-on: ubuntu-latest
-    outputs:
-      chart-folders: ${{ steps.find-helm.outputs.chart-folders }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Find Helm chart folders
-        id: find-helm
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
+      - name: Publish Helm charts as OCI artifacts
         shell: bash
         env:
           CHART_FOLDER: ${{ inputs.chart-folder }}
+          REF_NAME: ${{ github.head_ref || github.ref_name }}
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+          HELM_OCI_REGISTRY: ghcr.io/${{ github.repository }}/helm
+          HELM_REGISTRY_USERNAME: ${{ github.actor }}
+          HELM_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [[ -f "${CHART_FOLDER}/Chart.yaml" ]]; then
-            printf '%s\n' "${CHART_FOLDER}" > /tmp/chart-folders
+            chart_folders="${CHART_FOLDER}"
           elif [[ "${CHART_FOLDER}" == "deployment/helm" ]]; then
-            find deployment/helm -mindepth 2 -maxdepth 2 -type f -name Chart.yaml 2>/dev/null \
-              | sed 's#/Chart.yaml$##' \
-              | sort > /tmp/chart-folders
+            chart_folders=$(find deployment/helm -mindepth 2 -maxdepth 2 -type f -name Chart.yaml 2>/dev/null | sed 's#/Chart.yaml$##' | sort)
+            if [[ -z "${chart_folders}" ]]; then
+              echo "No Helm charts found below ${CHART_FOLDER}" >&2
+              exit 1
+            fi
           else
             echo "Helm chart not found: ${CHART_FOLDER}/Chart.yaml" >&2
             exit 1
           fi
-          if [[ ! -s /tmp/chart-folders ]]; then
-            echo "No Helm charts found below ${CHART_FOLDER}" >&2
+          printf '%s' "${HELM_REGISTRY_PASSWORD}" | helm registry login ghcr.io --username "${HELM_REGISTRY_USERNAME}" --password-stdin
+          HELM_OCI_REGISTRY="${HELM_OCI_REGISTRY,,}"
+          mkdir -p /tmp/helm-packages
+          while IFS= read -r chart_folder; do
+            if [[ "${IS_TAG}" != "true" ]]; then
+              chart_file="${chart_folder}/Chart.yaml"
+              base_version=$(sed -nE "s/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p" "${chart_file}")
+              ref_slug=$(echo "${REF_NAME}" | sed -E "s/[^a-zA-Z0-9-]+/-/g; s/^-+//; s/-+$//")
+              if [[ -z "${base_version}" || -z "${ref_slug}" ]]; then
+                echo "Could not determine a valid chart version or Git ref slug" >&2
+                exit 1
+              fi
+              chart_version="${base_version}-${ref_slug}"
+              sed -i -E "s/^version:.*$/version: ${chart_version}/" "${chart_file}"
+              echo "Publishing chart version ${chart_version}"
+            fi
+            helm dependency update "${chart_folder}"
+            helm package "${chart_folder}" --destination /tmp/helm-packages
+          done <<< "${chart_folders}"
+          shopt -s nullglob
+          chart_packages=(/tmp/helm-packages/*.tgz)
+          if (( ${#chart_packages[@]} == 0 )); then
+            echo "No Helm chart packages were created" >&2
             exit 1
           fi
-          chart_folders=$(python3 -c 'import json, sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))' < /tmp/chart-folders)
-          echo "chart-folders=${chart_folders}" >> "${GITHUB_OUTPUT}"
-
-  helm-oci:
-    needs: helm-charts
-    if: ${{ needs.helm-charts.outputs.chart-folders != '[]' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        chart-folder: ${{ fromJSON(needs.helm-charts.outputs.chart-folders) }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Temporarily modify chart version to '1.2.3-<GIT-REF>'
-        if: ${{ github.ref_type != 'tag' }}
-        shell: bash
-        env:
-          CHART_FOLDER: ${{ matrix.chart-folder }}
-          REF_NAME: ${{ github.head_ref || github.ref_name }}
-        run: |
-          chart_file="${CHART_FOLDER}/Chart.yaml"
-          base_version=$(sed -nE "s/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p" "${chart_file}")
-          ref_slug=$(echo "${REF_NAME}" | sed -E "s/[^a-zA-Z0-9-]+/-/g; s/^-+//; s/-+$//")
-          if [[ -z "${base_version}" || -z "${ref_slug}" ]]; then
-            echo "Could not determine a valid chart version or Git ref slug" >&2
-            exit 1
-          fi
-          chart_version="${base_version}-${ref_slug}"
-          sed -i -E "s/^version:.*$/version: ${chart_version}/" "${chart_file}"
-          echo "Publishing chart version ${chart_version}"
-      - name: Push Helm chart as OCI artifact
-        uses: bsord/helm-push@5ec3320fb5720a0a5aa210d871999f2b836f2d97
-        with:
-          useOCIRegistry: true
-          registry-url:  oci://ghcr.io/${{ github.repository }}/helm
-          username: ${{ github.actor }}
-          access-token: ${{ secrets.GITHUB_TOKEN }}
-          chart-folder: ${{ matrix.chart-folder }}
-          update-dependencies: true
-          force: true
+          for chart_package in "${chart_packages[@]}"; do
+            helm push "${chart_package}" "oci://${HELM_OCI_REGISTRY}"
+          done

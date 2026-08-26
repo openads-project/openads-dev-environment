@@ -124,6 +124,7 @@ def test_oci_workflows_derive_sorted_multi_launch_suffix_tags() -> None:
         assert "suffix=${suffix%.yml}" in workflow
 
     assert 'artifact_tag="$COMPOSE_IMAGE_TAG-$suffix"' in gitlab_ci
+    assert 'docker compose -f "$compose_file" publish --with-env --yes' in gitlab_ci
     assert 'artifact_tag="${IMAGE_TAG}-${suffix}"' in github_workflow
     assert "COMPOSE_FOLDER: deployment/compose" in gitlab_ci
     assert "COMPOSE_FILE:" not in gitlab_ci
