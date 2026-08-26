@@ -4,12 +4,12 @@ on:
   workflow_call:
     inputs:
       cleanup-compose:
-        description: Clean the repository's optional Compose GHCR package
+        description: Clean ${{ github.repository }}/compose
         required: false
         type: boolean
         default: true
       cleanup-helm:
-        description: Clean the repository's optional Helm OCI GHCR package
+        description: Clean ${{ github.repository }}/helm
         required: false
         type: boolean
         default: true
