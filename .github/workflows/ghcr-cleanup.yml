@@ -4,12 +4,12 @@ on:
   workflow_call:
     inputs:
       cleanup-compose:
-        description: Clean ${{ github.repository }}/compose
+        description: Clean github.repository/compose
         required: false
         type: boolean
         default: true
       cleanup-helm:
-        description: Clean ${{ github.repository }}/helm
+        description: Clean github.repository/helm
         required: false
         type: boolean
         default: true
