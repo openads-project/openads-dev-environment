@@ -17,8 +17,9 @@ services:
       SERVICE_TOPIC_OTHER: ~/service_other
       LOG_LEVEL: ${LOG_LEVEL:-info}
       USE_SIM_TIME: ${USE_SIM_TIME:-false}
-      PARAMS: ${PARAMS:-/docker-ros/ws/install/sample_pkg_multi_node/share/sample_pkg_multi_node/config/params.yml}
-      PARAMS_OTHER: ${PARAMS_OTHER:-}
+      PARAMS: /docker-ros/ws/install/sample_pkg_multi_node/share/sample_pkg_multi_node/config/params.yml
+      PARAMS_OTHER: ""
+      ROS_TRACING: ${ROS_TRACING:-false}
     command:
       - /bin/bash
       - -ic
@@ -30,6 +31,7 @@ services:
           use_sim_time:=$${USE_SIM_TIME} \
           params:=$${PARAMS} \
           $${PARAMS_OTHER:+params_other:=$${PARAMS_OTHER}} \
+          ros_tracing:=$${ROS_TRACING} \
           input_topic:=$${INPUT_TOPIC} \
           output_topic:=$${OUTPUT_TOPIC} \
           service_topic:=$${SERVICE_TOPIC} \

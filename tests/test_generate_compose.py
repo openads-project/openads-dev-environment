@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,22 @@ def test_generate_compose_check_matches_checked_in_compose(repo_root: Path) -> N
     )
 
 
+def test_only_supported_environment_variables_are_host_exposed() -> None:
+    exposed_pattern = re.compile(r"\$\{([A-Z_]+):-")
+
+    exposed_names: set[str] = set()
+    generated_compose = ""
+    for repo_root in demo_repositories():
+        for compose_path in (repo_root / COMPOSE_DIR).glob("docker-compose*.yml"):
+            compose = compose_path.read_text(encoding="utf-8")
+            generated_compose += compose
+            exposed_names.update(exposed_pattern.findall(compose))
+
+    assert exposed_names == {"LOG_LEVEL", "USE_SIM_TIME", "ROS_TRACING"}
+    assert "PARAMS: ${PARAMS:-" not in generated_compose
+    assert "PARAMS_OTHER: ${PARAMS_OTHER:-" not in generated_compose
+
+
 def test_multi_launch_fixture_uses_abstract_launch_specific_outputs() -> None:
     compose_dir = MULTI_LAUNCH_FIXTURE / COMPOSE_DIR
     first_compose = (compose_dir / "docker-compose.first_node.yml").read_text(encoding="utf-8")
@@ -70,7 +87,7 @@ def test_multi_launch_fixture_uses_abstract_launch_specific_outputs() -> None:
         "docker-compose.second_node.yml",
     }
     assert "NAME: first_node" in first_compose
-    assert "config/params.first_node.yml}" in first_compose
+    assert "config/params.first_node.yml" in first_compose
     assert "ros2 launch sample_pkg_multi_launch first_node.launch.py" in first_compose
     assert "NAME: second_node" in second_compose
     assert "PARAMS:" not in second_compose

@@ -14,7 +14,7 @@ services:
       SERVICE_TOPIC: ~/service
       LOG_LEVEL: ${LOG_LEVEL:-info}
       USE_SIM_TIME: ${USE_SIM_TIME:-false}
-      PARAMS: ${PARAMS:-/docker-ros/ws/install/sample_pkg_other_package/share/sample_pkg_other_package/config/params.yml}
+      PARAMS: /docker-ros/ws/install/sample_pkg_other_package/share/sample_pkg_other_package/config/params.yml
     command:
       - /bin/bash
       - -ic

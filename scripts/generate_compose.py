@@ -34,6 +34,7 @@ COMPOSE_DIR = Path("deployment/compose")
 COMPOSE_PATH = Path("deployment/compose/docker-compose.yml")
 GITLAB_REGISTRY_ENV_NAME = "OPENADS_GITLAB_REGISTRY"
 STANDARD_LAUNCH_ARGUMENT_NAMES = ("namespace", "name", "log_level", "use_sim_time", "params")
+HOST_EXPOSED_ENV_NAMES = frozenset({"LOG_LEVEL", "USE_SIM_TIME", "ROS_TRACING"})
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class PackageMetadata:
 class EnvironmentVariable:
     name: str
     value: str
+    host_exposed: bool = False
 
 
 @dataclass(frozen=True)
@@ -532,14 +534,43 @@ def command_argument_names(launch_data: LaunchData) -> list[str]:
     return [name for name in names if name in sorted_launch_arguments(launch_data)]
 
 
+def _environment_variable(name: str, value: str) -> EnvironmentVariable:
+    return EnvironmentVariable(
+        name=name,
+        value=value,
+        host_exposed=name in HOST_EXPOSED_ENV_NAMES,
+    )
+
+
 def extra_launch_environment_variables(launch_data: LaunchData) -> list[EnvironmentVariable]:
     arguments = sorted_launch_arguments(launch_data)
     handled_names = {*STANDARD_LAUNCH_ARGUMENT_NAMES, *launch_data.remappable_topic_names}
     return [
-        EnvironmentVariable(name=env_name(argument.name), value=argument.default_value)
+        _environment_variable(
+            name=env_name(argument.name),
+            value=argument.default_value,
+        )
         for argument in arguments.values()
         if argument.name not in handled_names
     ]
+
+
+def _compose_environment_variables(launch_data: LaunchData, params_default_path: str | None) -> list[EnvironmentVariable]:
+    arguments = sorted_launch_arguments(launch_data)
+    variables = [
+        _environment_variable(
+            name="LOG_LEVEL",
+            value=arguments.get("log_level", LaunchArgument("log_level", "info", "")).default_value or "info",
+        ),
+        _environment_variable(
+            name="USE_SIM_TIME",
+            value=arguments.get("use_sim_time", LaunchArgument("use_sim_time", "false", "")).default_value or "false",
+        ),
+    ]
+    if params_default_path is not None:
+        variables.append(_environment_variable(name="PARAMS", value=params_default_path))
+    variables.extend(extra_launch_environment_variables(launch_data))
+    return variables
 
 
 def strip_markdown_code(value: str) -> str:
@@ -648,8 +679,6 @@ def render_compose(
     input_variables, output_variables, other_topic_variables = topic_environment_variables(
         launch_data, repo_root / package_metadata.name / "README.md"
     )
-    log_level = arguments.get("log_level", LaunchArgument("log_level", "info", "")).default_value or "info"
-    use_sim_time = arguments.get("use_sim_time", LaunchArgument("use_sim_time", "false", "")).default_value or "false"
     if multi_launch:
         node_name = arguments.get("name", LaunchArgument("name", package_metadata.name, "")).default_value
         node_name = node_name or package_metadata.name
@@ -673,9 +702,7 @@ def render_compose(
         "input_variables": input_variables,
         "output_variables": output_variables,
         "other_topic_variables": other_topic_variables,
-        "extra_launch_variables": extra_launch_environment_variables(launch_data),
-        "log_level": log_level,
-        "use_sim_time": use_sim_time,
+        "other_environment_variables": _compose_environment_variables(launch_data, params_default_path),
         "params_default_path": params_default_path,
         "launch_package": package_metadata.name,
         "launch_file_name": launch_data.launch_file_name,
