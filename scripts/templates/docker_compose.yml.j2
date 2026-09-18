@@ -22,12 +22,7 @@ services:
 {% for variable in other_topic_variables %}
       {{ variable.name }}: {{ variable.value }}
 {% endfor %}
-      LOG_LEVEL: ${LOG_LEVEL:-{{ log_level }}}
-      USE_SIM_TIME: ${USE_SIM_TIME:-{{ use_sim_time }}}
-{% if params_default_path %}
-      PARAMS: {{ params_default_path }}
-{% endif %}
-{% for variable in extra_launch_variables %}
+{% for variable in other_environment_variables %}
 {% if variable.host_exposed %}
       {{ variable.name }}: ${{ "{" }}{{ variable.name }}:-{{ variable.value }}{{ "}" }}
 {% elif variable.value == "" %}
