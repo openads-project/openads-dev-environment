@@ -28,6 +28,7 @@ flowchart LR
     NODE("{{ node.node_name | replace('"', "'") }}")
 {% for subscriber in node.subscribers %}    S{{ loop.index0 }}:::hidden -->|{{ subscriber.name | mermaid_edge_label }}| NODE
 {% endfor %}{% for service_server in node.service_servers %}    SS{{ loop.index0 }}:::hidden o--o|{{ service_server.name | mermaid_edge_label }}| NODE
+{% endfor %}{% for service_client in node.service_clients %}    NODE o--o|{{ service_client.name | mermaid_edge_label }}| SC{{ loop.index0 }}:::hidden
 {% endfor %}{% for publisher in node.publishers %}    NODE -->|{{ publisher.name | mermaid_edge_label }}| P{{ loop.index0 }}:::hidden
 {% endfor %}{% for action_server in node.action_servers %}    AS{{ loop.index0 }}:::hidden o-.-o|{{ action_server.name | mermaid_edge_label }}| NODE
 {% endfor %}    classDef hidden display: none;
@@ -38,7 +39,7 @@ flowchart LR
 {%- if node.manual_text -%}
 {%- set ns.parts = ns.parts + [node.manual_text] -%}
 {%- endif -%}
-{%- if node.subscribers or node.publishers or node.service_servers or node.action_servers -%}
+{%- if node.subscribers or node.publishers or node.service_servers or node.service_clients or node.action_servers -%}
 {%- set ns.parts = ns.parts + [render_node_diagram(node)] -%}
 {%- endif -%}
 {%- if node.subscribers -%}
@@ -62,6 +63,14 @@ flowchart LR
 #### Service Servers
 
 {{ render_named_interface_table('Service', node.service_servers) }}
+{%- endset -%}
+{%- set ns.parts = ns.parts + [block | trim] -%}
+{%- endif -%}
+{%- if node.service_clients -%}
+{%- set block -%}
+#### Service Clients
+
+{{ render_named_interface_table('Service', node.service_clients) }}
 {%- endset -%}
 {%- set ns.parts = ns.parts + [block | trim] -%}
 {%- endif -%}

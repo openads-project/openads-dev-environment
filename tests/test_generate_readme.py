@@ -113,6 +113,7 @@ def test_render_indexed_topic_as_quoted_mermaid_label() -> None:
         ],
         publishers=[],
         service_servers=[],
+        service_clients=[],
         action_servers=[],
         action_clients=[],
         parameters=[],
@@ -143,3 +144,138 @@ def test_render_ordinary_topic_as_unquoted_mermaid_label() -> None:
     generator = load_generator()
 
     assert generator.render_mermaid_edge_label("~/point_cloud") == "~/point_cloud"
+
+
+def test_extract_service_clients_from_cpp_source() -> None:
+    """Extract direct ROS service clients created by a node."""
+    generator = load_generator()
+    source = """
+      left_turn_indicator_service_client_ =
+          this->create_client<std_srvs::srv::SetBool>("~/enable_left_turn_indicator");
+      right_turn_indicator_service_client_ =
+          this->create_client<std_srvs::srv::SetBool>("~/enable_right_turn_indicator");
+      hazard_lights_service_client_ =
+          this->create_client<std_srvs::srv::SetBool>("~/enable_hazard_lights");
+    """
+
+    aliases = {}
+
+    assert generator.extract_service_clients(source, aliases) == [
+        generator.ServiceInterface(
+            name="~/enable_left_turn_indicator",
+            srv_type="std_srvs/srv/SetBool",
+        ),
+        generator.ServiceInterface(
+            name="~/enable_right_turn_indicator",
+            srv_type="std_srvs/srv/SetBool",
+        ),
+        generator.ServiceInterface(
+            name="~/enable_hazard_lights",
+            srv_type="std_srvs/srv/SetBool",
+        ),
+    ]
+
+
+def test_extract_service_clients_ignores_action_clients() -> None:
+    """Do not classify rclcpp_action clients as ROS service clients."""
+    generator = load_generator()
+    source = """
+      action_client_ = rclcpp_action::create_client<PlanRoute>(
+          this, "/planning/lanelet2_route_planning/plan_route");
+      enable_client_ =
+          this->create_client<std_srvs::srv::SetBool>("~/enable");
+    """
+
+    aliases = {}
+
+    assert generator.extract_service_clients(source, aliases) == [
+        generator.ServiceInterface(name="~/enable", srv_type="std_srvs/srv/SetBool")
+    ]
+
+
+def test_extract_service_clients_from_python_source() -> None:
+    """Extract ROS service clients from a Python node."""
+    generator = load_generator()
+    source = """
+from std_srvs.srv import SetBool
+
+
+class ExampleNode(Node):
+    def __init__(self):
+        super().__init__("example")
+        self.client = self.create_client(SetBool, "~/enable")
+"""
+
+    interfaces = generator.extract_python_node_interfaces(source, "fallback")
+
+    assert interfaces is not None
+    assert interfaces.service_clients == [
+        generator.ServiceInterface(name="~/enable", srv_type="std_srvs/srv/SetBool")
+    ]
+
+
+def test_service_clients_reach_node_template_context() -> None:
+    """Propagate service clients from node interfaces into the template context."""
+    generator = load_generator()
+    node = generator.NodeInterfaces(
+        node_name="simple_planner_node",
+        service_clients=[
+            generator.ServiceInterface(
+                name="~/enable_left_turn_indicator",
+                srv_type="std_srvs/srv/SetBool",
+            )
+        ],
+    )
+
+    context = generator.build_node_context(node, {}, {}, {})
+
+    assert context.service_clients == [
+        generator.InterfaceTableRow(
+            name="~/enable_left_turn_indicator",
+            interface_type="std_srvs/srv/SetBool",
+            description="TODO",
+        )
+    ]
+
+
+def test_service_client_only_node_gets_diagram_and_edge() -> None:
+    """A node with only service clients must still get a Mermaid diagram and edge."""
+    generator = load_generator()
+    node = generator.NodeTemplateContext(
+        node_name="simple_planner_node",
+        manual_text="",
+        subscribers=[],
+        publishers=[],
+        service_servers=[],
+        service_clients=[
+            generator.InterfaceTableRow(
+                name="~/enable_left_turn_indicator",
+                interface_type="std_srvs/srv/SetBool",
+                description="TODO",
+            )
+        ],
+        action_servers=[],
+        action_clients=[],
+        parameters=[],
+    )
+    context = generator.PackageTemplateContext(
+        package_name="simple_planner",
+        package_description="Simple planner",
+        sections=[
+            generator.PackageSection(
+                title="Nodes",
+                kind="nodes",
+                nodes=[node],
+            )
+        ],
+    )
+
+    rendered = (
+        generator.build_template_environment()
+        .get_template("package_readme.md.j2")
+        .render(**asdict(context))
+    )
+
+    assert "```mermaid" in rendered
+    assert "NODE o--o|~/enable_left_turn_indicator| SC0:::hidden" in rendered
+    assert "#### Service Clients" in rendered
