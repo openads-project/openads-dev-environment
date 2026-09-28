@@ -83,6 +83,7 @@ class NodeInterfaces:
     subscribers: list = field(default_factory=list)
     publishers: list = field(default_factory=list)
     service_servers: list = field(default_factory=list)
+    service_clients: list = field(default_factory=list)
     action_servers: list = field(default_factory=list)
     action_clients: list = field(default_factory=list)
     parameters: list = field(default_factory=list)
@@ -158,6 +159,7 @@ class NodeTemplateContext:
     subscribers: list[InterfaceTableRow]
     publishers: list[InterfaceTableRow]
     service_servers: list[InterfaceTableRow]
+    service_clients: list[InterfaceTableRow]
     action_servers: list[InterfaceTableRow]
     action_clients: list[InterfaceTableRow]
     parameters: list[Parameter]
@@ -677,6 +679,14 @@ def extract_service_servers(source: str, aliases: dict) -> list:
     ]
 
 
+def extract_service_clients(source: str, aliases: dict) -> list:
+    """Return ROS service clients created directly by a node."""
+    return [
+        ServiceInterface(name=m.group(2), srv_type=cpp_ros_type(m.group(1), aliases))
+        for m in re.finditer(r'create_client\s*<([^>]+)>\s*\(\s*"([^"]+)"', source)
+    ]
+
+
 def find_cpp_call_bodies(source: str, function_name: str) -> list[str]:
     """Return the argument body of each function call, excluding declarations/definitions."""
     bodies = []
@@ -1052,6 +1062,7 @@ def extract_python_node_interfaces(source: str, fallback_name: str) -> Optional[
     subscribers: list = []
     publishers: list = []
     service_servers: list = []
+    service_clients: list = []
     action_servers: list = []
     action_clients: list = []
 
@@ -1071,6 +1082,11 @@ def extract_python_node_interfaces(source: str, fallback_name: str) -> Optional[
             srv_type = resolve_python_interface_type(python_call_argument(node, 0, 'srv_type'), type_map)
             if srv_name and srv_type:
                 service_servers.append(ServiceInterface(name=srv_name, srv_type=srv_type))
+        elif call_name == 'create_client':
+            srv_name = ast_constant_string(python_call_argument(node, 1, 'srv_name'))
+            srv_type = resolve_python_interface_type(python_call_argument(node, 0, 'srv_type'), type_map)
+            if srv_name and srv_type:
+                service_clients.append(ServiceInterface(name=srv_name, srv_type=srv_type))
         elif call_name in ('ActionServer', 'ActionClient'):
             action_name = ast_constant_string(python_call_argument(node, 2, 'action_name'))
             action_type = resolve_python_interface_type(python_call_argument(node, 1, 'action_type'), type_map)
@@ -1083,6 +1099,7 @@ def extract_python_node_interfaces(source: str, fallback_name: str) -> Optional[
         subscribers=unique_topic_interfaces(subscribers),
         publishers=unique_topic_interfaces(publishers),
         service_servers=service_servers,
+        service_clients=service_clients,
         action_servers=action_servers,
         action_clients=action_clients,
         parameters=extract_python_parameters(tree, source),
@@ -1557,6 +1574,13 @@ def build_node_context(
             ('Nodes', f'`{node.node_name}`', 'Service Servers'),
             'service',
         ),
+        service_clients=build_interface_rows(
+            node.service_clients,
+            'srv_type',
+            manual_descriptions,
+            ('Nodes', f'`{node.node_name}`', 'Service Clients'),
+            'service',
+        ),
         action_servers=build_interface_rows(
             node.action_servers,
             'action_type',
@@ -2001,6 +2025,7 @@ def main():
                     subscribers=extract_subscribers(source, source_type_aliases, string_symbols, variable_types),
                     publishers=extract_publishers(source, source_type_aliases, string_symbols, variable_types),
                     service_servers=extract_service_servers(source, source_type_aliases),
+                    service_clients=extract_service_clients(source, source_type_aliases),
                     action_servers=extract_action_servers(source, source_type_aliases),
                     action_clients=extract_action_clients(source, source_type_aliases),
                     parameters=resolve_parameters(extract_raw_parameters(source), member_var_map, build_enum_value_map(headers)),
