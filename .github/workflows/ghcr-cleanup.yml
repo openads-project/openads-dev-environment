@@ -3,13 +3,18 @@ name: ghcr-cleanup
 on:
   workflow_call:
     inputs:
+      images:
+        description: Comma-separated images below the repository package, for example `server,client` for `<repo>/server` and `<repo>/client`. The repository package itself is always cleaned.
+        required: false
+        type: string
+        default: ""
       cleanup-compose:
-        description: Clean github.repository/compose
+        description: Clean the Compose packages, github.repository/compose[/<deployment>]
         required: false
         type: boolean
         default: true
       cleanup-helm:
-        description: Clean github.repository/helm
+        description: Clean the Helm packages, github.repository/helm/<chart>
         required: false
         type: boolean
         default: true
@@ -26,29 +31,50 @@ jobs:
       - name: Determine package names
         id: package
         shell: bash
+        env:
+          IMAGES: ${{ inputs.images }}
         run: |
           repository_name='${{ github.event.repository.name }}'
-          echo "helm_chart_name=${repository_name//_/-}" >> "$GITHUB_OUTPUT"
-          launch_suffixes=
-          while IFS= read -r chart_file; do
-            chart_version=$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${chart_file}")
-            app_version=$(sed -nE 's/^appVersion:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${chart_file}")
-            if [[ "${chart_version}" == "${app_version}-"* ]]; then
-              launch_suffix=${chart_version#"${app_version}-"}
-              launch_suffix=${launch_suffix//./\\.}
-              launch_suffixes="${launch_suffixes:+${launch_suffixes}|}${launch_suffix}"
+          repository_name=${repository_name,,}
+
+          image_packages=${repository_name}
+          IFS=',' read -ra images <<< "${IMAGES}"
+          for image in "${images[@]}"; do
+            image=${image//[[:space:]]/}
+            if [[ -n "${image}" ]]; then
+              image_packages="${image_packages},${repository_name}/${image}"
             fi
-          done < <(find deployment/helm -mindepth 2 -maxdepth 2 -type f -name Chart.yaml 2>/dev/null | sort)
-          if [[ -n "${launch_suffixes}" ]]; then
-            helm_exclude_tags="^[0-9]+\\.[0-9]+\\.[0-9]+(-(${launch_suffixes}))?(-main)?$"
-          else
-            helm_exclude_tags='^[0-9]+\.[0-9]+\.[0-9]+(-main)?$'
-          fi
-          echo "helm_exclude_tags=${helm_exclude_tags}" >> "$GITHUB_OUTPUT"
-      - name: Cleanup ${{ github.repository }}
+          done
+
+          # docker-compose.yml -> <repo>/compose, docker-compose.<deployment>.yml -> <repo>/compose/<deployment>
+          compose_packages=
+          while IFS= read -r compose_file; do
+            filename=${compose_file##*/}
+            package=${repository_name}/compose
+            if [[ "${filename}" != "docker-compose.yml" ]]; then
+              deployment=${filename#docker-compose.}
+              deployment=${deployment%.yml}
+              deployment=${deployment//_/-}
+              package="${package}/${deployment,,}"
+            fi
+            compose_packages="${compose_packages:+${compose_packages},}${package}"
+          done < <(find deployment/compose -maxdepth 1 -type f -name 'docker-compose*.yml' 2>/dev/null | sort)
+
+          # helm push appends the chart name: <repo>/helm/<chart>
+          helm_packages=
+          while IFS= read -r chart_name; do
+            helm_packages="${helm_packages:+${helm_packages},}${repository_name}/helm/${chart_name}"
+          done < <(find deployment/helm -mindepth 1 -maxdepth 2 -type f -name Chart.yaml 2>/dev/null | sort | xargs -r sed -nE 's/^name:[[:space:]]*([^[:space:]#]+).*$/\1/p' | sort -u)
+
+          {
+            echo "image_packages=${image_packages}"
+            echo "compose_packages=${compose_packages}"
+            echo "helm_packages=${helm_packages}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Cleanup ${{ steps.package.outputs.image_packages }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
-          packages: ${{ github.event.repository.name }}
+          packages: ${{ steps.package.outputs.image_packages }}
           dry-run: false
           use-regex: true
           skip-regex-checks: true
@@ -60,32 +86,32 @@ jobs:
           delete-partial-images: true
           delete-orphaned-images: true
           validate: true
-      - name: Cleanup ${{ github.repository }}/compose
-        if: ${{ inputs['cleanup-compose'] }}
+      - name: Cleanup ${{ steps.package.outputs.compose_packages }}
+        if: ${{ inputs['cleanup-compose'] && steps.package.outputs.compose_packages != '' }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
-          packages: ${{ github.event.repository.name }}/compose
+          packages: ${{ steps.package.outputs.compose_packages }}
           dry-run: false
           use-regex: true
           skip-regex-checks: true
           older-than: 1 month
-          exclude-tags: '^(v[0-9]+\.[0-9]+\.[0-9]+|main)$' # v1.2.3, main
+          exclude-tags: '^(v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+\.[0-9]+\.[0-9]+)?|main)$' # v1.2.3, v1.2.3-4.5.6, main
           delete-tags: ".*"
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true
           delete-orphaned-images: true
           validate: true
-      - name: Cleanup ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
-        if: ${{ inputs['cleanup-helm'] }}
+      - name: Cleanup ${{ steps.package.outputs.helm_packages }}
+        if: ${{ inputs['cleanup-helm'] && steps.package.outputs.helm_packages != '' }}
         uses: dataaxiom/ghcr-cleanup-action@v1.2.2
         with:
-          packages: ${{ github.event.repository.name }}/helm/${{ steps.package.outputs.helm_chart_name }}
+          packages: ${{ steps.package.outputs.helm_packages }}
           dry-run: false
           use-regex: true
           skip-regex-checks: true
           older-than: 1 month
-          exclude-tags: ${{ steps.package.outputs.helm_exclude_tags }} # 1.2.3, 1.2.3-<launch>, *-main
+          exclude-tags: '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+\.[0-9]+\.[0-9]+)?(-main)?$' # 1.2.3, 1.2.3-4.5.6, *-main
           delete-tags: ".*"
           delete-untagged: true
           delete-ghost-images: true

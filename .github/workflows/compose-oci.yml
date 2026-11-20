@@ -45,12 +45,13 @@ jobs:
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}/compose"
           while IFS= read -r compose_file; do
-            artifact_tag=${IMAGE_TAG}
+            artifact_image=${image}
             filename=${compose_file##*/}
             if [[ "${filename}" != "docker-compose.yml" ]]; then
-              suffix=${filename#docker-compose.}
-              suffix=${suffix%.yml}
-              artifact_tag="${IMAGE_TAG}-${suffix}"
+              deployment=${filename#docker-compose.}
+              deployment=${deployment%.yml}
+              deployment=${deployment//_/-}
+              artifact_image="${image}/${deployment,,}"
             fi
-            docker compose -f "${compose_file}" publish --with-env --yes "${image}:${artifact_tag}"
+            docker compose -f "${compose_file}" publish --with-env --yes "${artifact_image}:${IMAGE_TAG}"
           done < <(find "${COMPOSE_FOLDER}" -maxdepth 1 -type f -name 'docker-compose*.yml' | sort)
