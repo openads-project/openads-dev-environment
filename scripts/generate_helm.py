@@ -44,6 +44,22 @@ from generate_compose import (
 HELM_DIR = Path("deployment/helm")
 CHART_PATH = HELM_DIR / "Chart.yaml"
 VALUES_PATH = HELM_DIR / "values.yaml"
+DEPENDENCY_VERSION_PATTERN = re.compile(r"^(\s+name: openadservice\n\s+version:[ \t]*)(\d+(?:\.\d+)*)[ \t]*$", re.MULTILINE)
+
+
+def accept_newer_dependency_version(current: str, expected: str) -> str:
+    """Treat a newer openadservice dependency version in the repository as up to date."""
+    current_match = DEPENDENCY_VERSION_PATTERN.search(current)
+    expected_match = DEPENDENCY_VERSION_PATTERN.search(expected)
+    if current_match is None or expected_match is None:
+        return current
+
+    def version_key(version: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in version.split("."))
+
+    if version_key(current_match.group(2)) < version_key(expected_match.group(2)):
+        return current
+    return DEPENDENCY_VERSION_PATTERN.sub(rf"\g<1>{expected_match.group(2)}", current, count=1)
 
 
 def extract_readme_tagline(readme_path: Path) -> str | None:
@@ -230,7 +246,7 @@ def main() -> int:
         for relative_path, expected in sorted(expected_files.items()):
             output_path = repo_root / relative_path
             current = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
-            if current == expected:
+            if accept_newer_dependency_version(current, expected) == expected:
                 continue
             stale = True
             diff = build_diff(expected, current, output_path, repo_root)
