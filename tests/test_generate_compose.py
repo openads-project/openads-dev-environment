@@ -21,6 +21,7 @@ GENERATOR_SCRIPT = DEV_ENV_ROOT / "scripts" / "generate_compose.py"
 COMPOSE_DIR = Path("deployment/compose")
 GITLAB_CI_TEMPLATE = DEV_ENV_ROOT / ".gitlab-ci.template.yml"
 GITHUB_COMPOSE_WORKFLOW = DEV_ENV_ROOT / ".github" / "workflows" / "compose-oci.yml"
+GITHUB_CLEANUP_WORKFLOW = DEV_ENV_ROOT / ".github" / "workflows" / "ghcr-cleanup.yml"
 MULTI_LAUNCH_FIXTURE = FIXTURES_DIR / "sample_pkg_multi_launch"
 GENERATOR_SPEC = importlib.util.spec_from_file_location("compose_generator_under_test", GENERATOR_SCRIPT)
 assert GENERATOR_SPEC is not None and GENERATOR_SPEC.loader is not None
@@ -129,20 +130,25 @@ def test_generator_rejects_multi_launch_name_collisions() -> None:
         GENERATOR_MODULE.compose_paths_for_launch_files([Path("duplicate.launch.py"), Path("duplicate_launch.py")])
 
 
-def test_oci_workflows_derive_sorted_multi_launch_suffix_tags() -> None:
+def test_oci_workflows_publish_multi_launch_deployments_to_own_packages() -> None:
     gitlab_ci = GITLAB_CI_TEMPLATE.read_text(encoding="utf-8")
     github_workflow = GITHUB_COMPOSE_WORKFLOW.read_text(encoding="utf-8")
+    cleanup_workflow = GITHUB_CLEANUP_WORKFLOW.read_text(encoding="utf-8")
 
-    for workflow in (gitlab_ci, github_workflow):
+    for workflow in (gitlab_ci, github_workflow, cleanup_workflow):
         assert "-maxdepth 1 -type f -name 'docker-compose*.yml'" in workflow
         assert "| sort" in workflow
         assert "filename=${compose_file##*/}" in workflow
-        assert "suffix=${filename#docker-compose.}" in workflow
-        assert "suffix=${suffix%.yml}" in workflow
+        assert "deployment=${filename#docker-compose.}" in workflow
+        assert "deployment=${deployment%.yml}" in workflow
 
-    assert 'artifact_tag="$COMPOSE_IMAGE_TAG-$suffix"' in gitlab_ci
-    assert 'docker compose -f "$compose_file" publish --with-env --yes' in gitlab_ci
-    assert 'artifact_tag="${IMAGE_TAG}-${suffix}"' in github_workflow
+    assert 'artifact_image="$COMPOSE_IMAGE_NAME/$deployment"' in gitlab_ci
+    assert 'publish --with-env --yes "$artifact_image:$COMPOSE_IMAGE_TAG"' in gitlab_ci
+    assert 'artifact_image="${image}/${deployment,,}"' in github_workflow
+    assert 'publish --with-env --yes "${artifact_image}:${IMAGE_TAG}"' in github_workflow
+    assert 'package="${package}/${deployment,,}"' in cleanup_workflow
+    assert "-$suffix" not in gitlab_ci
+    assert "-${suffix}" not in github_workflow
     assert "COMPOSE_FOLDER: deployment/compose" in gitlab_ci
     assert "COMPOSE_FILE:" not in gitlab_ci
     assert "compose-folder:" in github_workflow

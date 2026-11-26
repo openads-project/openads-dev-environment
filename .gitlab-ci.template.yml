@@ -38,14 +38,15 @@ compose-oci:
     - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
     - |
       for compose_file in $COMPOSE_FILES; do
-        artifact_tag=$COMPOSE_IMAGE_TAG
+        artifact_image=$COMPOSE_IMAGE_NAME
         filename=${compose_file##*/}
         if [ "$filename" != docker-compose.yml ]; then
-          suffix=${filename#docker-compose.}
-          suffix=${suffix%.yml}
-          artifact_tag="$COMPOSE_IMAGE_TAG-$suffix"
+          deployment=${filename#docker-compose.}
+          deployment=${deployment%.yml}
+          deployment=$(echo "$deployment" | tr '_' '-' | tr '[:upper:]' '[:lower:]')
+          artifact_image="$COMPOSE_IMAGE_NAME/$deployment"
         fi
-        docker compose -f "$compose_file" publish --with-env --yes "$COMPOSE_IMAGE_NAME:$artifact_tag"
+        docker compose -f "$compose_file" publish --with-env --yes "$artifact_image:$COMPOSE_IMAGE_TAG"
       done
 
 helm-oci:

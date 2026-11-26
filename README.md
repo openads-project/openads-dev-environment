@@ -166,7 +166,7 @@ To check whether the committed Compose file is up to date without changing it, r
 
 The generator expects a ROS package subdirectory with launch files in `launch/`. A package-level `<package>_launch.py` remains the exclusive default and generates `deployment/compose/docker-compose.yml`. Without that default, a single launch file that directly starts the package generates the same output. Multiple directly launching files generate `deployment/compose/docker-compose.<name>.yml`, where `<name>` is the filename without `_launch.py` or `.launch.py`. Launch files that only include other launch files do not create a deployment.
 
-Multi-launch deployments use each launch file's default node name and parameter file. The GitHub and GitLab `compose-oci` jobs publish them below the existing Compose image name with the launch name appended to the ref tag, for example `compose:main-cam_generator`. Single-launch artifact names and tags remain unchanged.
+Multi-launch deployments use each launch file's default node name and parameter file. The GitHub and GitLab `compose-oci` jobs publish each of them to its own package below the Compose image name, named after the launch with underscores converted to hyphens, for example `compose/cam-generator:main`. A single `docker-compose.yml` is published to `compose:<ref>`. See [Artifact Naming](#artifact-naming).
 
 Each directly launching file must define at least one `Node` and `DeclareLaunchArgument(...)` entries. A `remappable_topics` list is optional and only controls which topic remaps are exposed and grouped as Compose environment variables. The generator owns `docker-compose.yml` and `docker-compose.*.yml` below `deployment/compose`; generation removes obsolete outputs and `--check` reports them.
 
@@ -180,7 +180,7 @@ Use [`generate_helm.py`](scripts/generate_helm.py) to generate `helm/Chart.yaml`
 .openads-dev-environment/scripts/generate_helm.py --check
 ```
 
-A single launch deployment keeps the existing `deployment/helm/Chart.yaml` and `deployment/helm/values.yaml` paths, chart name, and version. Multiple directly launching files generate one chart below `deployment/helm/<name>/` per launch file. All charts use the same package-derived chart name and therefore share one OCI repository. Multi-launch chart versions append the launch name with underscores converted to hyphens, for example `1.0.0-first-node`; branch builds append the Git ref afterwards. The Helm OCI workflows discover, package, publish, and clean up all generated charts. Generation pins the `openadservice` dependency to the template version, while `--check` also accepts a newer version in the repository.
+A single launch deployment keeps the existing `deployment/helm/Chart.yaml` and `deployment/helm/values.yaml` paths, chart name, and version. Multiple directly launching files generate one chart below `deployment/helm/<name>/` per launch file. Each chart is named after its launch file with underscores converted to hyphens, for example `first-node`, keeps the package version and is therefore published to its own OCI repository, `helm/first-node`. Branch builds append the Git ref to the version. The Helm OCI workflows discover, package, publish, and clean up all generated charts. Generation pins the `openadservice` dependency to the template version, while `--check` also accepts a newer version in the repository. See [Artifact Naming](#artifact-naming).
 
 ### Consistency Checker
 
@@ -228,5 +228,17 @@ This repository stores CI workflow templates for the following use cases. CI wor
 | `consistency` | Runs the [consistency checker](#consistency-checker) to check for repository consistency and convention adherence. |
 | `docker-ros` | Uses [docker-ros](https://github.com/ika-rwth-aachen/docker-ros) to build, test, and push a container image containing the ROS packages of the repository. |
 | `docs` | Builds and deploys documentation using [GitHub Pages](https://docs.github.com/en/pages) or [GitLab Pages](https://docs.gitlab.com/ee/user/project/pages/). |
-| `ghcr-cleanup` | Cleans up unused images in the GitHub Container Registry. |
+| `ghcr-cleanup` | Deletes branch builds and untagged images older than a month from the repository's image, Compose and Helm packages in the GitHub Container Registry; releases and `main` are kept. Further images below the repository package are passed with `images`, for example `images: server,client`. |
 | `helm-oci` | Publishes the repository's single- or multi-launch Helm charts as OCI artifacts to the configured container registry. |
+
+#### Artifact Naming
+
+The package path says what an artifact is, the tag says which state of the repository it was built from. A deployment name appears in the path only when a repository has more than one deployment; Helm always appends the chart name. Images follow [docker-ros](https://github.com/ika-rwth-aachen/docker-ros).
+
+| Artifact | Package | Release `v1.2.3` | `main` | Branch `feature/x` |
+| --- | --- | --- | --- | --- |
+| Image | `<repo>`, further images `<repo>/<image>` | `v1.2.3`, `v1.2.3-dev`, `v1.2.3-slim` | `latest`, `latest-dev`, `latest-slim` | `latest_feature-x_ci`, `latest-dev_feature-x_ci`, `latest-slim_feature-x_ci` |
+| Compose | `<repo>/compose`, or `<repo>/compose/<deployment>` | `v1.2.3` | `main` | `feature-x` |
+| Helm | `<repo>/helm/<chart>` | `1.2.3` | `1.2.3-main` | `1.2.3-feature-x` |
+
+Helm needs the version first because chart versions must be SemVer.

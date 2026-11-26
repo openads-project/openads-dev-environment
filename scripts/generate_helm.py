@@ -127,10 +127,9 @@ def render_helm(
     multi_launch: bool,
 ) -> tuple[str, str]:
     launch_stem = launch_file_stem(Path(launch_data.launch_file_name))
-    chart_name = compose_service_name(package_metadata.name)
-    chart_version = (
-        f"{package_metadata.version}-{compose_service_name(launch_stem)}" if multi_launch else package_metadata.version
-    )
+    # helm push appends the chart name to the OCI path: <repo>/helm/<chart_name>.
+    chart_name = compose_service_name(launch_stem if multi_launch else package_metadata.name)
+    chart_version = package_metadata.version
 
     arguments = sorted_launch_arguments(launch_data)
     input_variables, output_variables, other_topic_variables = topic_environment_variables(
