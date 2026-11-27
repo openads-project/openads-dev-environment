@@ -87,7 +87,7 @@ description: Helm chart for sample_pkg
 dependencies:
   - repository: oci://ghcr.io/openads-project/openads-helm
     name: openadservice
-    version: 1.2.0
+    version: 1.3.0
 """
     assert (repo_root / VALUES_PATH).read_text(encoding="utf-8") == """\
 openadservice:
@@ -182,17 +182,17 @@ def test_generate_helm_check_accepts_newer_dependency_version(tmp_path: Path) ->
 
     chart_path = repo_root / CHART_PATH
     generated_chart = chart_path.read_text(encoding="utf-8")
-    assert "    version: 1.2.0\n" in generated_chart
+    assert "    version: 1.3.0\n" in generated_chart
 
-    chart_path.write_text(generated_chart.replace("    version: 1.2.0\n", "    version: 1.3.0\n"), encoding="utf-8")
+    chart_path.write_text(generated_chart.replace("    version: 1.3.0\n", "    version: 1.4.0\n"), encoding="utf-8")
     assert run_generator(repo_root, "--check").returncode == 0
 
-    chart_path.write_text(generated_chart.replace("    version: 1.2.0\n", "    version: 1.1.0\n"), encoding="utf-8")
+    chart_path.write_text(generated_chart.replace("    version: 1.3.0\n", "    version: 1.2.0\n"), encoding="utf-8")
     check_result = run_generator(repo_root, "--check")
     assert check_result.returncode == 1
     assert "helm/Chart.yaml" in check_result.stdout
 
-    chart_path.write_text(generated_chart.replace("    version: 1.2.0\n", "    version: 1.3.0\n"), encoding="utf-8")
+    chart_path.write_text(generated_chart.replace("    version: 1.3.0\n", "    version: 1.4.0\n"), encoding="utf-8")
     assert run_generator(repo_root).returncode == 0
     assert chart_path.read_text(encoding="utf-8") == generated_chart
 
